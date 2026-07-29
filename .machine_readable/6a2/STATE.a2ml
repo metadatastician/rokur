@@ -1,45 +1,61 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
 #
-# STATE.a2ml — Rokur project state
+# STATE.a2ml — Rokur project state (MEASURED, not self-reported)
 [metadata]
 project = "rokur"
 version = "0.1.0"
-last-updated = "2026-03-10"
+last-updated = "2026-07-28"
 status = "active"
-session = "converted from scheme — 2026-04-11"
+session = "measured audit — 2026-07-28"
+measurement-method = "file reads, builds executed, tests run; see STATUS.md"
 
 [project-context]
 name = "Rokur"
-purpose = """CI/CD pipeline not yet configured"""
-completion-percentage = 72
+purpose = """Secrets gate — validates required secrets, evaluates authorization policy, emits audit logs"""
+completion-percentage = 70
+completion-basis = "measured 2026-07-28; supersedes earlier self-reported figure"
 
 [position]
-phase = "infrastructure-buildout"   # design | implementation | testing | maintenance | archived
-maturity = "experimental"  # experimental | alpha | beta | production | lts
+phase = "testing"   # design | implementation | testing | maintenance | archived
+maturity = "beta"  # experimental | alpha | beta | production | lts
 
-[route-to-mvp]
-milestones = [
-  { name = "Rokur", completion = 100 },
-  { name = "Policy Engine", completion = 100 },
-  { name = "Rate Limiter", completion = 100 },
-  { name = "Audit Logging", completion = 100 },
-  { name = "Token Authentication", completion = 100 },
-  { name = "Graceful Shutdown", completion = 100 },
-  { name = "Test Suite", completion = 100 },
-  { name = "Infrastructure", completion = 15 },
+[verified-working]
+items = [
+  """2,302 lines across 10 files. `deno check` clean. **ZERO** TODO, FIXME, stubs, or 'not implemented' throws across 37 functions""",
+  """**The only non-vacuous test suite in the ecosystem**: `deno task test` -> 7 tests / 50 steps, all pass. `test/integration_test.js` spins up the REAL HTTP server and exercises it — 401 without token, 400 on invalid JSON, 409 when secrets missing, 404 on unknown path, request-ID propagation""",
+  """Per-IP sliding-window rate limiting is real and independently tested""",
+  """The documented API matches the code exactly: `/health`, `/v1/secrets/status`, `/v1/authorize-start`, `/metrics`, `/v1/secrets/reload`""",
+  """Fail-closed external policy contract implemented in `policy/engine.js`""",
 ]
 
 [blockers-and-issues]
 issues = [
-  # No blockers recorded
+  """**Orphaned.** No repo imports or invokes rokur. The only cross-references are in svalinn, in a document describing code that was deleted.""",
+  """`ROKUR_GATE_ENABLED` unset is a documented **fail-open** default — the gate does not gate unless explicitly switched on.""",
+  """Default config ships `required = []`, so the gate starts open.""",
+  """No build or test gate on GitHub — the good tests are not run by CI.""",
+  """`LICENSE` claims PMPL-1.0-or-later but ships no PMPL text and points at a nonexistent `../../../LICENSE`.""",
+  """No `contractiles/` directory (the only one of the six without) and no ABI-FFI-README.""",
 ]
 
 [critical-next-actions]
 actions = [
-  # No actions recorded
+  """RULING NEEDED (R6): adopt rokur as the Phase-3 pilot""",
+  """Make rokur read container/stapeln/rokur.toml as its config source""",
+  """Fix the ROKUR_GATE_ENABLED fail-open default to fail closed""",
+  """Add a CI gate that runs the existing (good) test suite""",
+  """Fix LICENSE — claims PMPL but ships no PMPL text""",
 ]
 
+[ecosystem]
+stack = ["stapeln", "selur", "vordr", "rokur", "cerro-torre", "svalinn"]
+designer = "stapeln"
+canonical-contract = "container/stapeln/ — 8-file bundle, one file per satellite"
+contract-status = "NOT EMITTED BY STAPELN AND NOT CONSUMED BY ANY SATELLITE as of 2026-07-28"
+runtime-chain = "svalinn(443/80) -> rokur(8081) -> app; vordr watches; cerro-torre signs; selur is network driver"
+
 [maintenance-status]
-last-run-utc = "2026-03-10T00:00:00Z"
-last-result = "unknown"  # unknown | pass | warn | fail
+last-run-utc = "2026-07-28T00:00:00Z"
+last-result = "measured"  # unknown | pass | warn | fail | measured
+reference = "dev-notes/stapeln-ecosystem-COMPREHENSIVE-SITREP-2026-07-28.md"
