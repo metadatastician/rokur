@@ -15,7 +15,39 @@ import { createRateLimiter } from "./rate_limit.js";
 // Configuration
 // ---------------------------------------------------------------------------
 
-let config = loadConfig();
+//  --config <path> is optional. When absent rokur behaves exactly as before
+//  (environment only), so this is a superset of the previous contract.
+function parseConfigPath(args) {
+  const eq = args.find((a) => a.startsWith("--config="));
+  if (eq) return eq.slice("--config=".length);
+  const i = args.indexOf("--config");
+  if (i !== -1) {
+    if (i + 1 >= args.length) {
+      console.error("rokur: --config requires a path");
+      Deno.exit(1);
+    }
+    return args[i + 1];
+  }
+  return undefined;
+}
+
+const configPath = parseConfigPath(Deno.args);
+
+//  FAIL CLOSED at startup. loadConfig throws if a config file was named and
+//  could not be fully understood; a secrets gate that starts on a
+//  half-applied policy is worse than one that refuses to start.
+let config;
+try {
+  config = loadConfig({ configPath });
+} catch (error) {
+  console.error(JSON.stringify({
+    level: "FATAL",
+    message: "configuration could not be loaded; refusing to start",
+    error: error.message,
+    service: "rokur",
+  }));
+  Deno.exit(1);
+}
 
 function secretEnvName(secretName) {
   const normalized = secretName.toUpperCase().replace(/[^A-Z0-9]/g, "_");
@@ -343,7 +375,7 @@ function handleReloadSecrets(request, requestId, clientIp) {
   }
 
   const previousCount = config.requiredSecrets.length;
-  config = loadConfig();
+  config = loadConfig({ configPath });
 
   try {
     policyEvaluator = initPolicyEvaluator();
@@ -433,7 +465,7 @@ const serverHandler = async (request, connInfo) => {
 
   // Route dispatch.
   let response;
-  if (method === "GET" && pathname === "/health") {
+  if (method === "GET" && pathname === config.healthPath) {
     response = handleHealth(requestId);
   } else if (method === "GET" && pathname === "/v1/secrets/status") {
     response = await handleSecretsStatus(request, requestId, clientIp);
@@ -494,7 +526,10 @@ Deno.addSignalListener("SIGINT", () => initiateShutdown("SIGINT"));
 // SIGHUP triggers a full config reload without restart.
 Deno.addSignalListener("SIGHUP", () => {
   const previousCount = config.requiredSecrets.length;
-  config = loadConfig();
+  //  A bad file here does NOT take the process down: the existing catch keeps
+  //  the previous configuration, which is the right call mid-flight -- unlike
+  //  startup, there is already a known-good policy in memory to fall back to.
+  config = loadConfig({ configPath });
   try {
     policyEvaluator = initPolicyEvaluator();
     console.log(JSON.stringify({

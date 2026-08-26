@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: MPL-2.0
+#
+# rokur.toml — optional. rokur runs from the environment alone if this file is
+# absent, so adopting it is additive.
+#
+# PRECEDENCE: environment > this file > built-in default. An operator's env
+# must always be able to override a file baked into an image.
+#
+# STRICT BY DESIGN: an unknown table, an unknown key, or a wrong type makes
+# rokur REFUSE TO START. A secrets gate running on a half-understood policy is
+# worse than one that does not run.
+#
+# Start it with:  rokur --config rokur.toml
+
+[metadata]
+name = "rokur-gate"
+version = "1.0.0"
+
+[server]
+host = "127.0.0.1"
+port = 9090            # rokur's own port. selur's vordr default moved to 9091
+health_path = "/health"
+ready_path  = "/ready"
+# NOTE: there is deliberately no `backend` key. rokur is a secrets gate, not a
+# reverse proxy -- it forwards no traffic. Setting one is a startup error.
+
+[secrets]
+required = ["DB_PASSWORD", "API_KEY"]   # rokur refuses to start if any is missing
+sources  = ["env"]
+
+[rate_limit]
+window_ms     = 60000
+max           = 60
+auth_fail_max = 5
+
+[policy]
+backend    = "builtin"   # or "external" with a command below
+timeout_ms = 1500
+
+[audit]
+enabled     = true
+path        = "/var/log/rokur/audit.jsonl"
+request_log = false
