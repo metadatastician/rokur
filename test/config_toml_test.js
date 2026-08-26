@@ -116,8 +116,8 @@ Deno.test("precedence: default applies with neither env nor file", () => {
 });
 
 Deno.test("no config file: behaviour is unchanged (env-only)", () => {
-  withEnv({ ROKUR_HOST: "10.0.0.1" }, () => {
-    assertEquals(loadConfig().host, "10.0.0.1");
+  withEnv({ ROKUR_HOST: "127.0.0.2" }, () => {
+    assertEquals(loadConfig().host, "127.0.0.2");
   });
 });
 

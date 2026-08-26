@@ -145,6 +145,43 @@ function typeOk(value, expected) {
   return false;
 }
 
+/** Throw unless `table` is a known table; returns its key schema. */
+function assertKnownTable(table, entries, path) {
+  const known = TOML_SCHEMA[table];
+  if (!known) {
+    throw new Error(
+      `rokur: ${path} has unknown table [${table}]. Known: ${Object.keys(TOML_SCHEMA).join(", ")}`,
+    );
+  }
+  if (typeof entries !== "object" || entries === null) {
+    throw new Error(`rokur: ${path} table [${table}] is not a table`);
+  }
+  return known;
+}
+
+/** Throw unless `key` is known for `table` and `value` has the right type. */
+function assertKnownEntry(table, key, value, known, path) {
+  // rokur is a secrets gate, NOT a reverse proxy. The bundle's rokur.toml once
+  // described `backend` forwarding, which rokur has never implemented;
+  // accepting the key would imply otherwise.
+  if (table === "server" && key === "backend") {
+    throw new Error(
+      `rokur: ${path} sets [server] backend. rokur is a secrets gate, not a proxy -- it forwards nothing.`,
+    );
+  }
+  const expected = known[key];
+  if (!expected) {
+    throw new Error(
+      `rokur: ${path} has unknown key [${table}] ${key}. Known: ${Object.keys(known).join(", ")}`,
+    );
+  }
+  if (!typeOk(value, expected)) {
+    throw new Error(
+      `rokur: ${path} [${table}] ${key} must be ${expected}, got ${typeof value}`,
+    );
+  }
+}
+
 /**
  * Read and validate a rokur.toml, returning flat config overrides.
  *
@@ -173,35 +210,9 @@ export function loadTomlFile(path) {
 
   const overrides = {};
   for (const [table, entries] of Object.entries(parsed)) {
-    const known = TOML_SCHEMA[table];
-    if (!known) {
-      throw new Error(
-        `rokur: ${path} has unknown table [${table}]. Known: ${Object.keys(TOML_SCHEMA).join(", ")}`,
-      );
-    }
-    if (typeof entries !== "object" || entries === null) {
-      throw new Error(`rokur: ${path} table [${table}] is not a table`);
-    }
+    const known = assertKnownTable(table, entries, path);
     for (const [key, value] of Object.entries(entries)) {
-      // rokur is a secrets gate, NOT a reverse proxy. The bundle's rokur.toml
-      // once described `backend` forwarding, which rokur has never
-      // implemented; accepting the key would imply otherwise.
-      if (table === "server" && key === "backend") {
-        throw new Error(
-          `rokur: ${path} sets [server] backend. rokur is a secrets gate, not a proxy -- it forwards nothing.`,
-        );
-      }
-      const expected = known[key];
-      if (!expected) {
-        throw new Error(
-          `rokur: ${path} has unknown key [${table}] ${key}. Known: ${Object.keys(known).join(", ")}`,
-        );
-      }
-      if (!typeOk(value, expected)) {
-        throw new Error(
-          `rokur: ${path} [${table}] ${key} must be ${expected}, got ${typeof value}`,
-        );
-      }
+      assertKnownEntry(table, key, value, known, path);
       const field = TOML_TO_CONFIG[`${table}.${key}`];
       if (field) overrides[field] = value;
     }
