@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+import { parse as parseToml } from "@std/toml";
 // Rokur configuration — centralised environment variable parsing.
 //
 // All Deno.env.get() calls for Rokur configuration are consolidated here.
@@ -47,10 +48,15 @@ function parseBooleanEnv(name, defaultValue = false) {
  *
  * @returns {string[]}
  */
-function parseRequiredSecrets() {
+function parseRequiredSecrets(fileValue) {
+  const raw = Deno.env.get("ROKUR_REQUIRED_SECRETS");
+  // env wins; else the file's array verbatim; else empty
+  if ((raw ?? "").trim().length === 0 && Array.isArray(fileValue)) {
+    return Array.from(new Set(fileValue.map((v) => v.trim()).filter((v) => v.length > 0)));
+  }
   return Array.from(
     new Set(
-      (Deno.env.get("ROKUR_REQUIRED_SECRETS") ?? "")
+      (raw ?? "")
         .split(",")
         .map((value) => value.trim())
         .filter((value) => value.length > 0),
@@ -65,9 +71,11 @@ function parseRequiredSecrets() {
  * @param {number} defaultValue - Fallback when absent or invalid.
  * @returns {number}
  */
-function parsePositiveInt(name, defaultValue) {
+function parsePositiveInt(name, defaultValue, fileValue) {
   const raw = Deno.env.get(name);
   if (!raw || raw.trim().length === 0) {
+    // No env var: fall back to the file, then the built-in default.
+    if (Number.isInteger(fileValue) && fileValue >= 1) return fileValue;
     return defaultValue;
   }
 
@@ -80,6 +88,139 @@ function parsePositiveInt(name, defaultValue) {
 }
 
 /**
+ * Env lookup that treats an EMPTY value as absent.
+ *
+ * `Deno.env.get("X") ?? fileValue` is wrong: `??` falls through only on
+ * null/undefined, so `X=""` yields "" and shadows the file. Empty and unset
+ * mean the same thing for configuration, and the rest of this module already
+ * treats them alike (see parsePositiveInt).
+ */
+function envOr(name) {
+  const raw = Deno.env.get(name);
+  return raw === undefined || raw.trim().length === 0 ? undefined : raw;
+}
+
+/**
+ * Known TOML tables and the config keys each may set.
+ *
+ * An allowlist, deliberately. An unrecognised table or key makes loadTomlFile
+ * THROW rather than be ignored: a silently-dropped setting in a secrets gate
+ * is a config that looks applied and is not.
+ */
+const TOML_SCHEMA = {
+  metadata: { name: "string", version: "string" },
+  server: { host: "string", port: "number", health_path: "string", ready_path: "string" },
+  secrets: { required: "string[]", sources: "string[]" },
+  rate_limit: { window_ms: "number", max: "number", auth_fail_max: "number" },
+  policy: { backend: "string", command: "string", command_args: "string", timeout_ms: "number" },
+  audit: { enabled: "boolean", path: "string", request_log: "boolean" },
+};
+
+/** TOML `table.key` -> the flat config field it populates. */
+const TOML_TO_CONFIG = {
+  "server.host": "host",
+  "server.port": "port",
+  "server.health_path": "healthPath",
+  "server.ready_path": "readyPath",
+  "secrets.required": "requiredSecrets",
+  "rate_limit.window_ms": "rateLimitWindowMs",
+  "rate_limit.max": "rateLimitMax",
+  "rate_limit.auth_fail_max": "rateLimitAuthFailMax",
+  "policy.backend": "policyBackend",
+  "policy.command": "policyCommand",
+  "policy.command_args": "policyCommandArgs",
+  "policy.timeout_ms": "policyTimeoutMs",
+  "audit.enabled": "auditLogEnabled",
+  "audit.path": "auditLogPath",
+  "audit.request_log": "requestLogEnabled",
+};
+
+function typeOk(value, expected) {
+  if (expected === "string") return typeof value === "string";
+  if (expected === "number") return typeof value === "number";
+  if (expected === "boolean") return typeof value === "boolean";
+  if (expected === "string[]") {
+    return Array.isArray(value) && value.every((v) => typeof v === "string");
+  }
+  return false;
+}
+
+/** Throw unless `table` is a known table; returns its key schema. */
+function assertKnownTable(table, entries, path) {
+  const known = TOML_SCHEMA[table];
+  if (!known) {
+    throw new Error(
+      `rokur: ${path} has unknown table [${table}]. Known: ${Object.keys(TOML_SCHEMA).join(", ")}`,
+    );
+  }
+  if (typeof entries !== "object" || entries === null) {
+    throw new Error(`rokur: ${path} table [${table}] is not a table`);
+  }
+  return known;
+}
+
+/** Throw unless `key` is known for `table` and `value` has the right type. */
+function assertKnownEntry(table, key, value, known, path) {
+  // rokur is a secrets gate, NOT a reverse proxy. The bundle's rokur.toml once
+  // described `backend` forwarding, which rokur has never implemented;
+  // accepting the key would imply otherwise.
+  if (table === "server" && key === "backend") {
+    throw new Error(
+      `rokur: ${path} sets [server] backend. rokur is a secrets gate, not a proxy -- it forwards nothing.`,
+    );
+  }
+  const expected = known[key];
+  if (!expected) {
+    throw new Error(
+      `rokur: ${path} has unknown key [${table}] ${key}. Known: ${Object.keys(known).join(", ")}`,
+    );
+  }
+  if (!typeOk(value, expected)) {
+    throw new Error(
+      `rokur: ${path} [${table}] ${key} must be ${expected}, got ${typeof value}`,
+    );
+  }
+}
+
+/**
+ * Read and validate a rokur.toml, returning flat config overrides.
+ *
+ * THROWS on anything it does not fully understand -- unreadable file, TOML
+ * syntax error, unknown table, unknown key, wrong type. It never returns a
+ * partial result. rokur is a secrets gate: starting with a half-read policy is
+ * worse than not starting at all.
+ *
+ * @param {string} path
+ * @returns {object} flat overrides, e.g. { port: 9090, requiredSecrets: [...] }
+ */
+export function loadTomlFile(path) {
+  let text;
+  try {
+    text = Deno.readTextFileSync(path);
+  } catch (err) {
+    throw new Error(`rokur: cannot read config file ${path}: ${err.message}`);
+  }
+
+  let parsed;
+  try {
+    parsed = parseToml(text);
+  } catch (err) {
+    throw new Error(`rokur: ${path} is not valid TOML: ${err.message}`);
+  }
+
+  const overrides = {};
+  for (const [table, entries] of Object.entries(parsed)) {
+    const known = assertKnownTable(table, entries, path);
+    for (const [key, value] of Object.entries(entries)) {
+      assertKnownEntry(table, key, value, known, path);
+      const field = TOML_TO_CONFIG[`${table}.${key}`];
+      if (field) overrides[field] = value;
+    }
+  }
+  return overrides;
+}
+
+/**
  * Loads every Rokur configuration value from the environment.
  *
  * Safe to call multiple times — each invocation re-reads the environment so
@@ -87,29 +228,30 @@ function parsePositiveInt(name, defaultValue) {
  *
  * @returns {object} Configuration object.
  */
-export function loadConfig() {
-  const host = Deno.env.get("ROKUR_HOST") ?? "127.0.0.1";
-  const port = Number(Deno.env.get("ROKUR_PORT") ?? "9090");
+export function loadConfig(options = {}) {
+  //  Precedence is env > file > built-in default, in that order, per the
+  //  bundle contract: an operator's environment must always be able to
+  //  override a file shipped in an image.
+  const fileCfg = options.configPath ? loadTomlFile(options.configPath) : {};
+
+  const host = envOr("ROKUR_HOST") ?? fileCfg.host ?? "127.0.0.1";
+  const port = Number(envOr("ROKUR_PORT") ?? fileCfg.port ?? "9090");
+  const healthPath = envOr("ROKUR_HEALTH_PATH") ?? fileCfg.healthPath ?? "/health";
+  const readyPath = envOr("ROKUR_READY_PATH") ?? fileCfg.readyPath ?? "/ready";
   const apiToken = (Deno.env.get("ROKUR_API_TOKEN") ?? "").trim();
-  const requiredSecrets = parseRequiredSecrets();
+  const requiredSecrets = parseRequiredSecrets(fileCfg.requiredSecrets);
   const env = (Deno.env.get("ROKUR_ENV") ?? "development").trim().toLowerCase();
 
-  const policyBackend = (Deno.env.get("ROKUR_POLICY_BACKEND") ?? "builtin")
+  const policyBackend = (envOr("ROKUR_POLICY_BACKEND") ?? fileCfg.policyBackend ?? "builtin")
     .trim().toLowerCase();
-  const policyCommand = (Deno.env.get("ROKUR_POLICY_COMMAND") ?? "").trim();
-  const policyCommandArgs = (Deno.env.get("ROKUR_POLICY_COMMAND_ARGS") ?? "")
+  const policyCommand = (envOr("ROKUR_POLICY_COMMAND") ?? fileCfg.policyCommand ?? "").trim();
+  const policyCommandArgs = (envOr("ROKUR_POLICY_COMMAND_ARGS") ?? fileCfg.policyCommandArgs ?? "")
     .trim();
-  const policyTimeoutMs = parsePositiveInt("ROKUR_POLICY_TIMEOUT_MS", 1500);
+  const policyTimeoutMs = parsePositiveInt("ROKUR_POLICY_TIMEOUT_MS", 1500, fileCfg.policyTimeoutMs);
 
-  const rateLimitWindowMs = parsePositiveInt(
-    "ROKUR_RATE_LIMIT_WINDOW_MS",
-    60_000,
-  );
-  const rateLimitMax = parsePositiveInt("ROKUR_RATE_LIMIT_MAX", 60);
-  const rateLimitAuthFailMax = parsePositiveInt(
-    "ROKUR_RATE_LIMIT_AUTH_FAIL_MAX",
-    5,
-  );
+  const rateLimitWindowMs = parsePositiveInt("ROKUR_RATE_LIMIT_WINDOW_MS", 60_000, fileCfg.rateLimitWindowMs);
+  const rateLimitMax = parsePositiveInt("ROKUR_RATE_LIMIT_MAX", 60, fileCfg.rateLimitMax);
+  const rateLimitAuthFailMax = parsePositiveInt("ROKUR_RATE_LIMIT_AUTH_FAIL_MAX", 5, fileCfg.rateLimitAuthFailMax);
 
   const auditLogEnabled = parseBooleanEnv("ROKUR_AUDIT_LOG", true);
   const auditLogPath = (Deno.env.get("ROKUR_AUDIT_LOG_PATH") ?? "").trim();
@@ -127,6 +269,8 @@ export function loadConfig() {
   return {
     host,
     port,
+    healthPath,
+    readyPath,
     apiToken,
     requiredSecrets,
     env,
