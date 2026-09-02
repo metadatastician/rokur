@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: MPL-2.0
 # Dependabot configuration for RSR-compliant repositories
-# Covers common ecosystems - remove unused ones for your project
+# Trimmed to the ecosystems this repo actually uses. rokur is a Deno project;
+# Dependabot has no Deno ecosystem, so only GitHub Actions is managed here.
+# (The RSR template ships cargo/mix/npm/pip/nix as examples — none have a
+# matching manifest in this repo, so declaring them only produced red
+# "Dependabot Updates" runs against non-existent manifests.)
 
 version: 2
 updates:
@@ -13,39 +17,3 @@ updates:
       actions:
         patterns:
           - "*"
-
-  # Rust/Cargo
-  - package-ecosystem: "cargo"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    # `open-pull-requests-limit: 0` suppresses routine version-update PRs
-    # while leaving Dependabot SECURITY PRs flowing. The previous
-    # `ignore: "*" patch` rule also silenced security PRs under GitHub\'s
-    # current Dependabot behaviour. See rsr-template-repo commit 78b050e
-    # and 007-lang/audits/audit-dependabot-automation-gap-2026-04-17.md.
-    open-pull-requests-limit: 0
-
-  # Elixir/Mix
-  - package-ecosystem: "mix"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-
-  # Node.js/npm
-  - package-ecosystem: "npm"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-
-  # Python/pip
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-
-  # Nix flakes
-  - package-ecosystem: "nix"
-    directory: "/"
-    schedule:
-      interval: "weekly"
