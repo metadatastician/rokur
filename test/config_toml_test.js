@@ -67,25 +67,41 @@ Deno.test("loadTomlFile: REJECTS [server] backend -- rokur is not a proxy", () =
   );
 });
 
-Deno.test("loadTomlFile: unknown table throws", () => {
-  const p = tmpToml(`[nonsense]\nx = 1\n`);
-  assertThrows(() => loadTomlFile(p), Error, "unknown table");
-});
+/** Assert that a rokur.toml body is rejected with a message containing `needle`. */
+function assertTomlRejected(body, needle) {
+  assertThrows(() => loadTomlFile(tmpToml(body)), Error, needle);
+}
 
-Deno.test("loadTomlFile: unknown key throws", () => {
-  const p = tmpToml(`[server]\nnot_a_key = 1\n`);
-  assertThrows(() => loadTomlFile(p), Error, "unknown key");
-});
+// Part 2 of the contract: anything not fully understood THROWS. These four
+// cases differ ONLY in the file body and the expected message, so the shape is
+// written once here and each case keeps its own name and its own failure.
+// (Previously four hand-copied blocks -- Sonar CPD, 23 duplicated lines.)
+const REJECTED_TOML = [
+  [
+    "loadTomlFile: unknown table throws",
+    "[nonsense]\nx = 1\n",
+    "unknown table",
+  ],
+  [
+    "loadTomlFile: unknown key throws",
+    "[server]\nnot_a_key = 1\n",
+    "unknown key",
+  ],
+  [
+    "loadTomlFile: wrong type throws",
+    '[server]\nport = "9090"\n',
+    "must be number",
+  ],
+  [
+    "loadTomlFile: malformed TOML throws",
+    "[server\nport = 9090\n",
+    "not valid TOML",
+  ],
+];
 
-Deno.test("loadTomlFile: wrong type throws", () => {
-  const p = tmpToml(`[server]\nport = "9090"\n`);
-  assertThrows(() => loadTomlFile(p), Error, "must be number");
-});
-
-Deno.test("loadTomlFile: malformed TOML throws", () => {
-  const p = tmpToml(`[server\nport = 9090\n`);
-  assertThrows(() => loadTomlFile(p), Error, "not valid TOML");
-});
+for (const [name, body, needle] of REJECTED_TOML) {
+  Deno.test(name, () => assertTomlRejected(body, needle));
+}
 
 Deno.test("loadTomlFile: missing file throws", () => {
   assertThrows(
