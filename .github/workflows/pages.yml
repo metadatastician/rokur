@@ -4,11 +4,12 @@ on:
   push:
     branches: [main, master]
   workflow_dispatch:
-permissions:
-  actions: read
-  contents: read
-  pages: write
-  id-token: write
+# The workflow-level permissions block moved to the two jobs below. A job-level
+# block REPLACES the workflow-level one rather than adding to it, so each job
+# carries the SAME four grants it had before -- byte-identical, deliberately not
+# split per job. Narrowing them is not attempted here: this workflow is
+# `push`/`workflow_dispatch` only, so no pull request can exercise the change.
+# (Sonar githubactions:S8264 read-at-workflow-level, S8233 write-at-workflow-level.)
 concurrency:
   group: "pages"
   cancel-in-progress: false
@@ -16,6 +17,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
     container:
       image: ghcr.io/stefan-hoeck/idris2-pack@sha256:f0758996a931fb35d9ecb1de273c4d59dabe2a09b433afc7e357f65a08b7e1ff
     steps:
@@ -49,6 +55,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: build
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
     steps:
       - name: Deploy to GitHub Pages
         id: deployment

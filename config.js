@@ -38,8 +38,13 @@ function parseBooleanEnv(name, defaultValue = false) {
     return false;
   }
 
+  // The VALUE is deliberately NOT echoed. rokur is a secrets gate and this
+  // message is interpolated straight into the FATAL log line in main.js; an
+  // operator who mis-sets a secret-bearing variable must not have its contents
+  // written to the log. The name and the accepted vocabulary are enough to fix
+  // the mistake. (Sonar jssecurity:S8689 -- fixed at the source, not the sink.)
   throw new Error(
-    `Invalid boolean value for ${name}: "${rawValue}". Use true/false, 1/0, yes/no, or on/off.`,
+    `Invalid boolean value for ${name}. Use true/false, 1/0, yes/no, or on/off.`,
   );
 }
 

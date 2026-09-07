@@ -5,10 +5,17 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-permissions: read-all
+# No workflow-level permissions block: the single job below declares its own,
+# which is what this workflow's GITHUB_TOKEN is scoped to.
+# (Sonar githubactions:S8234 read-all, and S8264 read-at-workflow-level.)
 jobs:
   scan:
     runs-on: ubuntu-latest
+    # `read-all` previously granted every read scope to a job that runs checkout
+    # and one `echo`, nothing else. `contents: read` is what checkout needs; no
+    # step here reads actions, packages, issues, deployments or anything else.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
       - name: Run Hypatia scan
