@@ -105,4 +105,9 @@ jobs:
           # A `::warning::` annotation cannot carry a literal newline -- it
           # would be truncated to the first line -- so join with %0A.
           joined=$(printf '%s' "$files" | awk 'NF{ if (n++) printf "%%0A"; printf "%s", $0 }')
-          echo "::warning title=deno fmt --check (advisory, non-gating)::${count} file(s) are not formatted. This job cannot fail the build:%0A${joined}"
+          # NB no comma in the title: `::warning title=...::` is a
+          # COMMA-SEPARATED property list, so a comma silently truncates the
+          # title and the remainder is parsed as another property. Measured on
+          # the first run of this workflow, which rendered `deno fmt --check
+          # (advisory` with an unbalanced paren.
+          echo "::warning title=deno fmt --check (advisory / non-gating)::${count} file(s) are not formatted. This job cannot fail the build:%0A${joined}"
