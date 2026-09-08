@@ -48,13 +48,14 @@ jobs:
 
   # ADVISORY ONLY -- THIS JOB CANNOT FAIL BY DESIGN.
   #
-  # `deno fmt --check` fails on 12 pre-existing files today. It is not made a
-  # gate, and the tree is not reformatted to make it one, because `deno fmt`
-  # repo-wide would re-expand a tuple table in the test suite that was
-  # deliberately formatted to stay under SonarCloud's copy-paste-detection
-  # threshold -- the duplication finding cured in rokur PR #17. Reformatting
-  # would re-trigger a Sonar quality-gate red. Fixing formatting is a separate,
-  # owner-scoped chore.
+  # `deno fmt --check` fails on 12 files that were ALREADY unformatted before
+  # this PR and that this PR does not touch: 7 Markdown docs, config.js,
+  # main.js, test/config_file_integration_test.js, and two existing workflow
+  # files (deno fmt formats YAML too). Making fmt a gate would fail the build
+  # on day one over pre-existing debt that has nothing to do with adding a test
+  # gate, and reformatting the tree to make it pass would be a large diff
+  # unrelated to this PR. So it reports rather than gates, and fixing the
+  # formatting stays a separate, owner-scoped chore.
   fmt-advisory:
     name: fmt --check (advisory, non-gating)
     runs-on: ubuntu-latest
@@ -97,7 +98,15 @@ jobs:
           count=$(printf '%s' "$files" | awk 'NF{n++} END{print n+0}')
           echo "deno fmt --check outcome: ${{ steps.fmt.outcome }}"
           if [ "$count" -eq 0 ]; then
-            echo "All files are formatted."
+            # Distinguish "nothing to report" from "fmt itself broke". If the fmt
+            # run failed but produced no parsable `from` lines, printing
+            # "All files are formatted." would be a fake green.
+            if [ "${{ steps.fmt.outcome }}" = "failure" ]; then
+              echo "::notice title=deno fmt --check::the fmt run itself failed and no file list could be recovered; see the captured output below."
+              cat "$out"
+            else
+              echo "All files are formatted."
+            fi
             exit 0
           fi
           echo "Files that fail 'deno fmt --check':"
