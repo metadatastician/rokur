@@ -1,0 +1,108 @@
+# SPDX-License-Identifier: MPL-2.0
+name: CI
+# rokur's first test workflow. Before this file, none of the repo's five
+# workflows (hypatia-scan, label-triage, labels, pages, secret-scanner) ever
+# ran `deno task test`, so "rokur green" meant "rokur untested".
+#
+# Two jobs, deliberately of DIFFERENT kinds:
+#   check-lint-test  -- a GATE. Every step must be able to fail the job.
+#                       No `continue-on-error`, no `|| true`, no `|| echo`.
+#   fmt-advisory     -- NOT a gate, and named so. See the comment on that job.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# No workflow-level grants. A job-level block REPLACES this one rather than
+# adding to it, so each job below carries its own `contents: read`.
+permissions: {}
+jobs:
+  check-lint-test:
+    name: check + lint + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          # The repo declares no CI Deno version: there is no .dvmrc, no
+          # `"deno"` field in deno.json and no .tool-versions. The two
+          # declarations that do exist disagree -- mise.toml says
+          # `deno = "latest"`, Containerfile pins `ARG DENO_VERSION=2.2.8`
+          # for the shipped image -- so neither is "the" CI version.
+          # `v2.x` is setup-deno's own default and the family verified locally.
+          deno-version: v2.x
+      - name: deno task check
+        run: deno task check
+      - name: deno lint
+        run: deno lint
+      - name: deno task test
+        run: deno task test
+
+  # ADVISORY ONLY -- THIS JOB CANNOT FAIL BY DESIGN.
+  #
+  # `deno fmt --check` fails on 12 pre-existing files today. It is not made a
+  # gate, and the tree is not reformatted to make it one, because `deno fmt`
+  # repo-wide would re-expand a tuple table in the test suite that was
+  # deliberately formatted to stay under SonarCloud's copy-paste-detection
+  # threshold -- the duplication finding cured in rokur PR #17. Reformatting
+  # would re-trigger a Sonar quality-gate red. Fixing formatting is a separate,
+  # owner-scoped chore.
+  fmt-advisory:
+    name: fmt --check (advisory, non-gating)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.x
+      - name: Run deno fmt --check (advisory)
+        id: fmt
+        # The ONLY continue-on-error in this workflow, and it is deliberate:
+        # it is what makes this job a reporter rather than a gate.
+        # Output is captured by redirection, not a pipe -- a pipe would hand
+        # the step `tee`'s exit status and `steps.fmt.outcome` would always
+        # read `success`.
+        continue-on-error: true
+        run: deno fmt --check > fmt-check.out 2>&1
+      - name: Annotate unformatted files
+        if: always()
+        run: |
+          set -u
+          out=fmt-check.out
+          if [ ! -f "$out" ]; then
+            echo "::notice title=deno fmt --check::no output captured; nothing to report."
+            exit 0
+          fi
+          # Strip ANSI colour, then take the `from <path>:` lines deno prints
+          # once per unformatted file, and make the paths workspace-relative.
+          files=$(
+            sed -e 's/\x1b\[[0-9;]*m//g' "$out" \
+              | sed -n 's/^from //p' \
+              | sed -e 's/:$//' -e "s|^${GITHUB_WORKSPACE}/||" \
+              | sort -u
+          )
+          count=$(printf '%s' "$files" | awk 'NF{n++} END{print n+0}')
+          echo "deno fmt --check outcome: ${{ steps.fmt.outcome }}"
+          if [ "$count" -eq 0 ]; then
+            echo "All files are formatted."
+            exit 0
+          fi
+          echo "Files that fail 'deno fmt --check':"
+          printf '%s\n' "$files"
+          # A `::warning::` annotation cannot carry a literal newline -- it
+          # would be truncated to the first line -- so join with %0A.
+          joined=$(printf '%s' "$files" | awk 'NF{ if (n++) printf "%%0A"; printf "%s", $0 }')
+          echo "::warning title=deno fmt --check (advisory, non-gating)::${count} file(s) are not formatted. This job cannot fail the build:%0A${joined}"
