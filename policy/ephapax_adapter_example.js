@@ -2,18 +2,8 @@
 // Example external policy adapter contract for Rokur.
 // Replace this with an Ephapax runner invocation when ready.
 
-const decoder = new TextDecoder();
-const encoder = new TextEncoder();
-
 async function readStdinJson() {
-  const chunks = [];
-  for await (const chunk of Deno.stdin.readable) {
-    chunks.push(chunk);
-  }
-  const merged = chunks.length === 1
-    ? chunks[0]
-    : Uint8Array.from(chunks.flatMap((chunk) => Array.from(chunk)));
-  const text = decoder.decode(merged).trim();
+  const text = (await Bun.stdin.text()).trim();
   return text.length > 0 ? JSON.parse(text) : {};
 }
 
@@ -35,4 +25,4 @@ function evaluate(payload) {
 
 const input = await readStdinJson();
 const decision = evaluate(input);
-await Deno.stdout.write(encoder.encode(JSON.stringify(decision)));
+process.stdout.write(JSON.stringify(decision));

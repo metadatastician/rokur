@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Unit tests for Rokur policy engine.
 
-import { assertEquals, assertThrows } from "@std/assert";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createPolicyEvaluator } from "../policy/engine.js";
 
 function secretEnvName(secretName) {
@@ -11,12 +10,12 @@ function secretEnvName(secretName) {
 }
 
 function setEnv(key, value) {
-  Deno.env.set(key, value);
+  process.env[key] = value;
 }
 
 function deleteEnv(key) {
   try {
-    Deno.env.delete(key);
+    delete process.env[key];
   } catch { /* noop */ }
 }
 
@@ -47,28 +46,20 @@ describe("createPolicyEvaluator", () => {
       secretEnvName,
     });
 
-    assertEquals(evaluator.config.resolvedBackend, "builtin");
-    assertEquals(evaluator.config.externalCommandConfigured, false);
+    expect(evaluator.config.resolvedBackend).toEqual("builtin");
+    expect(evaluator.config.externalCommandConfigured).toEqual(false);
   });
 
   it("throws when external backend requested without command", () => {
     setEnv("ROKUR_POLICY_BACKEND", "external");
 
-    assertThrows(
-      () => createPolicyEvaluator({ requiredSecrets: ["x"], secretEnvName }),
-      Error,
-      "ROKUR_POLICY_BACKEND=external requires ROKUR_POLICY_COMMAND",
-    );
+    expect(() => createPolicyEvaluator({ requiredSecrets: ["x"], secretEnvName })).toThrow("ROKUR_POLICY_BACKEND=external requires ROKUR_POLICY_COMMAND");
   });
 
   it("throws for invalid backend value", () => {
     setEnv("ROKUR_POLICY_BACKEND", "magic");
 
-    assertThrows(
-      () => createPolicyEvaluator({ requiredSecrets: ["x"], secretEnvName }),
-      Error,
-      'Invalid ROKUR_POLICY_BACKEND: "magic"',
-    );
+    expect(() => createPolicyEvaluator({ requiredSecrets: ["x"], secretEnvName })).toThrow('Invalid ROKUR_POLICY_BACKEND: "magic"');
   });
 
   it("auto backend resolves to builtin when no command configured", () => {
@@ -79,7 +70,7 @@ describe("createPolicyEvaluator", () => {
       secretEnvName,
     });
 
-    assertEquals(evaluator.config.resolvedBackend, "builtin");
+    expect(evaluator.config.resolvedBackend).toEqual("builtin");
   });
 
   it("auto backend resolves to external when command configured", () => {
@@ -91,8 +82,8 @@ describe("createPolicyEvaluator", () => {
       secretEnvName,
     });
 
-    assertEquals(evaluator.config.resolvedBackend, "external");
-    assertEquals(evaluator.config.externalCommandConfigured, true);
+    expect(evaluator.config.resolvedBackend).toEqual("external");
+    expect(evaluator.config.externalCommandConfigured).toEqual(true);
   });
 });
 
@@ -111,11 +102,11 @@ describe("builtin policy evaluation", () => {
 
     const decision = await evaluator.evaluate({});
 
-    assertEquals(decision.allowed, true);
-    assertEquals(decision.code, "AUTHORIZED");
-    assertEquals(decision.engine, "builtin");
-    assertEquals(decision.requiredSecretCount, 2);
-    assertEquals(decision.missingSecretCount, 0);
+    expect(decision.allowed).toEqual(true);
+    expect(decision.code).toEqual("AUTHORIZED");
+    expect(decision.engine).toEqual("builtin");
+    expect(decision.requiredSecretCount).toEqual(2);
+    expect(decision.missingSecretCount).toEqual(0);
   });
 
   it("denies when a required secret is missing", async () => {
@@ -129,11 +120,11 @@ describe("builtin policy evaluation", () => {
 
     const decision = await evaluator.evaluate({});
 
-    assertEquals(decision.allowed, false);
-    assertEquals(decision.code, "REQUIRED_SECRETS_MISSING");
-    assertEquals(decision.engine, "builtin");
-    assertEquals(decision.requiredSecretCount, 2);
-    assertEquals(decision.missingSecretCount, 1);
+    expect(decision.allowed).toEqual(false);
+    expect(decision.code).toEqual("REQUIRED_SECRETS_MISSING");
+    expect(decision.engine).toEqual("builtin");
+    expect(decision.requiredSecretCount).toEqual(2);
+    expect(decision.missingSecretCount).toEqual(1);
   });
 
   it("denies when a required secret is blank", async () => {
@@ -146,8 +137,8 @@ describe("builtin policy evaluation", () => {
 
     const decision = await evaluator.evaluate({});
 
-    assertEquals(decision.allowed, false);
-    assertEquals(decision.missingSecretCount, 1);
+    expect(decision.allowed).toEqual(false);
+    expect(decision.missingSecretCount).toEqual(1);
   });
 
   it("denies when all secrets are missing", async () => {
@@ -158,9 +149,9 @@ describe("builtin policy evaluation", () => {
 
     const decision = await evaluator.evaluate({});
 
-    assertEquals(decision.allowed, false);
-    assertEquals(decision.missingSecretCount, 3);
-    assertEquals(decision.requiredSecretCount, 3);
+    expect(decision.allowed).toEqual(false);
+    expect(decision.missingSecretCount).toEqual(3);
+    expect(decision.requiredSecretCount).toEqual(3);
   });
 
   it("allows with zero required secrets (vacuously true)", async () => {
@@ -171,9 +162,9 @@ describe("builtin policy evaluation", () => {
 
     const decision = await evaluator.evaluate({});
 
-    assertEquals(decision.allowed, true);
-    assertEquals(decision.requiredSecretCount, 0);
-    assertEquals(decision.missingSecretCount, 0);
+    expect(decision.allowed).toEqual(true);
+    expect(decision.requiredSecretCount).toEqual(0);
+    expect(decision.missingSecretCount).toEqual(0);
   });
 
   it("normalizes secret names to uppercase env vars", async () => {
@@ -186,7 +177,7 @@ describe("builtin policy evaluation", () => {
 
     const decision = await evaluator.evaluate({});
 
-    assertEquals(decision.allowed, true);
+    expect(decision.allowed).toEqual(true);
   });
 });
 
@@ -196,10 +187,12 @@ describe("external policy evaluation", () => {
 
   it("calls external command and parses allow response", async () => {
     setEnv("ROKUR_POLICY_BACKEND", "external");
-    setEnv("ROKUR_POLICY_COMMAND", "deno");
+    //  process.execPath, not the literal "bun": bun is not guaranteed to be on
+    //  PATH, and the evaluator spawns this command directly.
+    setEnv("ROKUR_POLICY_COMMAND", process.execPath);
     setEnv(
       "ROKUR_POLICY_COMMAND_ARGS",
-      '["run","--quiet","policy/ephapax_adapter_example.js"]',
+      JSON.stringify(["policy/ephapax_adapter_example.js"]),
     );
 
     const evaluator = createPolicyEvaluator({
@@ -210,8 +203,8 @@ describe("external policy evaluation", () => {
     const decision = await evaluator.evaluate({ image: "alpine:3.19" });
 
     // The example adapter always allows when missingSecretCount === 0
-    assertEquals(decision.allowed, true);
-    assertEquals(decision.engine, "external");
+    expect(decision.allowed).toEqual(true);
+    expect(decision.engine).toEqual("external");
   });
 
   it("fails closed when external command does not exist", async () => {
@@ -225,8 +218,8 @@ describe("external policy evaluation", () => {
 
     const decision = await evaluator.evaluate({});
 
-    assertEquals(decision.allowed, false);
-    assertEquals(decision.engine, "external");
+    expect(decision.allowed).toEqual(false);
+    expect(decision.engine).toEqual("external");
   });
 
   it("fails closed on timeout", async () => {
@@ -242,8 +235,8 @@ describe("external policy evaluation", () => {
 
     const decision = await evaluator.evaluate({});
 
-    assertEquals(decision.allowed, false);
-    assertEquals(decision.engine, "external");
+    expect(decision.allowed).toEqual(false);
+    expect(decision.engine).toEqual("external");
   });
 
   it("parses command args from JSON array", () => {
@@ -256,7 +249,7 @@ describe("external policy evaluation", () => {
       secretEnvName,
     });
 
-    assertEquals(evaluator.config.resolvedBackend, "external");
+    expect(evaluator.config.resolvedBackend).toEqual("external");
   });
 
   it("parses command args from CSV", () => {
@@ -269,6 +262,6 @@ describe("external policy evaluation", () => {
       secretEnvName,
     });
 
-    assertEquals(evaluator.config.resolvedBackend, "external");
+    expect(evaluator.config.resolvedBackend).toEqual("external");
   });
 });

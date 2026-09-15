@@ -1,0 +1,17 @@
+{
+  "name": "@metadatastician/rokur",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "smol-toml": "1.8.0"
+  },
+  "scripts": {
+    "start": "bun run main.js",
+    "dev": "bun run main.js",
+    "dev:external": "bun run main.js",
+    "test": "bun test",
+    "test:unit": "bun test test/engine_test.js test/rate_limit_test.js test/audit_test.js",
+    "test:integration": "bun test test/integration_test.js"
+  }
+}

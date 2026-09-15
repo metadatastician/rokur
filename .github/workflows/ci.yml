@@ -1,13 +1,18 @@
 # SPDX-License-Identifier: MPL-2.0
 name: CI
-# rokur's first test workflow. Before this file, none of the repo's five
-# workflows (hypatia-scan, label-triage, labels, pages, secret-scanner) ever
-# ran `deno task test`, so "rokur green" meant "rokur untested".
+# rokur's test + build gate, on bun.
 #
-# Two jobs, deliberately of DIFFERENT kinds:
-#   check-lint-test  -- a GATE. Every step must be able to fail the job.
-#                       No `continue-on-error`, no `|| true`, no `|| echo`.
-#   fmt-advisory     -- NOT a gate, and named so. See the comment on that job.
+# Two jobs, both GATES. Every step must be able to fail the job: no
+# `continue-on-error`, no `|| true`, no `|| echo`.
+#
+#   test   -- runs the suite AND asserts how many tests ran.
+#   image  -- builds the Containerfile, runs it, and probes it.
+#
+# The count assertion in `test` is load-bearing, not belt-and-braces. Measured
+# on bun 1.4.1: when test FILES match the glob but register ZERO tests, bun
+# prints `0 pass / 0 fail` and exits **0**. That is the exact failure mode of
+# this repo's deno->bun migration, so `rc=0` alone cannot protect the suite.
+# Only a count at or above a known floor can.
 on:
   push:
     branches: [main]
@@ -20,103 +25,114 @@ concurrency:
 # adding to it, so each job below carries its own `contents: read`.
 permissions: {}
 jobs:
-  check-lint-test:
-    name: check + lint + test
+  test:
+    name: test (with a test-count floor)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
+    env:
+      # The measured count on the commit that introduced this gate. Raise it
+      # when tests are added; a DROP below it fails the build on purpose.
+      ROKUR_TEST_FLOOR: 66
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up Deno
-        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          # The repo declares no CI Deno version: there is no .dvmrc, no
-          # `"deno"` field in deno.json and no .tool-versions. The two
-          # declarations that do exist disagree -- mise.toml says
-          # `deno = "latest"`, Containerfile pins `ARG DENO_VERSION=2.2.8`
-          # for the shipped image -- so neither is "the" CI version.
-          # `v2.x` is setup-deno's own default and the family verified locally.
-          deno-version: v2.x
-      - name: deno task check
-        run: deno task check
-      - name: deno lint
-        run: deno lint
-      - name: deno task test
-        run: deno task test
+          bun-version: 1.4.1
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Run the suite
+        id: suite
+        # Captured by redirection, not a pipe: a pipe would hand this step the
+        # exit status of the last command in the pipeline instead of bun's.
+        run: |
+          set -u
+          bun test > bun-test.out 2>&1 && rc=0 || rc=$?
+          cat bun-test.out
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+      - name: Assert the test count did not collapse
+        # `always()` so this still runs when the suite fails: a collapse to zero
+        # registrations is exactly the case where the count is most informative.
+        if: always()
+        run: |
+          set -u
+          if [ ! -f bun-test.out ]; then
+            echo "::error title=test count::no bun test output was captured; refusing to pass."
+            exit 1
+          fi
+          # Strip ANSI colour before parsing -- bun colourises this line.
+          count=$(
+            sed -e 's/\x1b\[[0-9;]*m//g' bun-test.out \
+              | sed -n 's/^Ran \([0-9][0-9]*\) tests.*/\1/p' \
+              | tail -1
+          )
+          if [ -z "$count" ]; then
+            echo "::error title=test count::could not parse 'Ran N tests' from the output; failing closed rather than assuming a pass."
+            exit 1
+          fi
+          echo "registered tests: $count (floor ${ROKUR_TEST_FLOOR})"
+          if [ "$count" -lt "$ROKUR_TEST_FLOOR" ]; then
+            echo "::error title=test count::only ${count} tests ran, floor is ${ROKUR_TEST_FLOOR}. A silent drop in registrations is the migration's main risk; bun exits 0 when a test file registers nothing."
+            exit 1
+          fi
 
-  # ADVISORY ONLY -- THIS JOB CANNOT FAIL BY DESIGN.
-  #
-  # `deno fmt --check` fails on 12 files that were ALREADY unformatted before
-  # this PR and that this PR does not touch: 7 Markdown docs, config.js,
-  # main.js, test/config_file_integration_test.js, and two existing workflow
-  # files (deno fmt formats YAML too). Making fmt a gate would fail the build
-  # on day one over pre-existing debt that has nothing to do with adding a test
-  # gate, and reformatting the tree to make it pass would be a large diff
-  # unrelated to this PR. So it reports rather than gates, and fixing the
-  # formatting stays a separate, owner-scoped chore.
-  fmt-advisory:
-    name: fmt --check (advisory, non-gating)
+  image:
+    name: build + run + probe the container
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up Deno
-        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
-        with:
-          deno-version: v2.x
-      - name: Run deno fmt --check (advisory)
-        id: fmt
-        # The ONLY continue-on-error in this workflow, and it is deliberate:
-        # it is what makes this job a reporter rather than a gate.
-        # Output is captured by redirection, not a pipe -- a pipe would hand
-        # the step `tee`'s exit status and `steps.fmt.outcome` would always
-        # read `success`.
-        continue-on-error: true
-        run: deno fmt --check > fmt-check.out 2>&1
-      - name: Annotate unformatted files
-        if: always()
+      - name: Build the image
+        # --no-cache is deliberate: a cached layer produced a FALSE GREEN for
+        # this Containerfile before. A stage printing no STEP lines is a cache
+        # hit, not a success.
+        run: podman build --no-cache -t rokur:ci -f Containerfile .
+      - name: Run it, and probe both endpoints
         run: |
-          set -u
-          out=fmt-check.out
-          if [ ! -f "$out" ]; then
-            echo "::notice title=deno fmt --check::no output captured; nothing to report."
-            exit 0
-          fi
-          # Strip ANSI colour, then take the `from <path>:` lines deno prints
-          # once per unformatted file, and make the paths workspace-relative.
-          files=$(
-            sed -e 's/\x1b\[[0-9;]*m//g' "$out" \
-              | sed -n 's/^from //p' \
-              | sed -e 's/:$//' -e "s|^${GITHUB_WORKSPACE}/||" \
-              | sort -u
-          )
-          count=$(printf '%s' "$files" | awk 'NF{n++} END{print n+0}')
-          echo "deno fmt --check outcome: ${{ steps.fmt.outcome }}"
-          if [ "$count" -eq 0 ]; then
-            # Distinguish "nothing to report" from "fmt itself broke". If the fmt
-            # run failed but produced no parsable `from` lines, printing
-            # "All files are formatted." would be a fake green.
-            if [ "${{ steps.fmt.outcome }}" = "failure" ]; then
-              echo "::notice title=deno fmt --check::the fmt run itself failed and no file list could be recovered; see the captured output below."
-              cat "$out"
-            else
-              echo "All files are formatted."
-            fi
-            exit 0
-          fi
-          echo "Files that fail 'deno fmt --check':"
-          printf '%s\n' "$files"
-          # A `::warning::` annotation cannot carry a literal newline -- it
-          # would be truncated to the first line -- so join with %0A.
-          joined=$(printf '%s' "$files" | awk 'NF{ if (n++) printf "%%0A"; printf "%s", $0 }')
-          # NB no comma in the title: `::warning title=...::` is a
-          # COMMA-SEPARATED property list, so a comma silently truncates the
-          # title and the remainder is parsed as another property. Measured on
-          # the first run of this workflow, which rendered `deno fmt --check
-          # (advisory` with an unbalanced paren.
-          echo "::warning title=deno fmt --check (advisory / non-gating)::${count} file(s) are not formatted. This job cannot fail the build:%0A${joined}"
+          set -eu
+          # Readiness is configured to SUCCEED here: the one required secret is
+          # supplied, so /ready must be 200.
+          podman run -d --name rokur-ci -p 17658:7658 \
+            -e ROKUR_ENV=development \
+            -e ROKUR_API_TOKEN=ci-token-$RANDOM$RANDOM \
+            -e ROKUR_REQUIRED_SECRETS=panic_profile \
+            -e ROKUR_SECRET_PANIC_PROFILE=enabled \
+            rokur:ci
+          # Probe from the HOST, so this tests the published port and the bind
+          # address together, not just in-container loopback.
+          curl --retry 30 --retry-delay 1 --retry-connrefused -fsS \
+            -o /dev/null http://127.0.0.1:17658/health
+          health=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:17658/health)
+          ready=$(curl  -s -o /dev/null -w '%{http_code}' http://127.0.0.1:17658/ready)
+          echo "/health=$health /ready=$ready"
+          [ "$health" = "200" ] || { echo "::error::/health returned $health, expected 200"; podman logs rokur-ci; exit 1; }
+          [ "$ready"  = "200" ] || { echo "::error::/ready returned $ready, expected 200 when required secrets are present"; podman logs rokur-ci; exit 1; }
+          podman rm -f rokur-ci
+      - name: Prove readiness can actually FAIL
+        run: |
+          set -eu
+          # Same image, required secret DELIBERATELY absent. A readiness probe
+          # that can only ever return 200 is not a probe, so this asserts the
+          # red path as well as the green one.
+          podman run -d --name rokur-ci-notready -p 17659:7658 \
+            -e ROKUR_ENV=development \
+            -e ROKUR_API_TOKEN=ci-token-$RANDOM$RANDOM \
+            -e ROKUR_REQUIRED_SECRETS=panic_profile \
+            rokur:ci
+          curl --retry 30 --retry-delay 1 --retry-connrefused -fsS \
+            -o /dev/null http://127.0.0.1:17659/health
+          health=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:17659/health)
+          ready=$(curl  -s -o /dev/null -w '%{http_code}' http://127.0.0.1:17659/ready)
+          echo "with the required secret missing: /health=$health /ready=$ready"
+          # Liveness must NOT follow readiness down: /health answers "is this
+          # process alive?", which it is.
+          [ "$health" = "200" ] || { echo "::error::/health returned $health; liveness must not track readiness"; exit 1; }
+          [ "$ready"  = "503" ] || { echo "::error::/ready returned $ready, expected 503 REQUIRED_SECRETS_MISSING"; podman logs rokur-ci-notready; exit 1; }
+          podman rm -f rokur-ci-notready

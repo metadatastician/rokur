@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 # Rokur — Measured Status
 
-**Last measured:** 2026-07-28  
+**Last measured:** 2026-09-15  
 **Honest completion:** ~70%  
-**Languages:** JavaScript (Deno)
+**Languages:** JavaScript (Bun)
 
 > This document records **measured** state: every claim below is a file read, a build
 > run, or a test executed on the dates shown. Where an existing document in this repo
@@ -14,10 +14,15 @@
 
 ~70%. The most complete and most honest component in the ecosystem — and nothing uses it.
 
+**2026-09-15:** the container now builds and runs. `podman build --no-cache` succeeds, the
+container serves `/health` 200 and `/ready` 200 with its required secret present, and
+`/ready` 503 `REQUIRED_SECRETS_MISSING` without it, while `/health` stays 200. CI asserts
+all four of those, so the claim is a gate rather than a note.
+
 ## What genuinely works
 
-- 2,302 lines across 10 files. `deno check` clean. **ZERO** TODO, FIXME, stubs, or 'not implemented' throws across 37 functions
-- **The only non-vacuous test suite in the ecosystem**: `deno task test` -> 7 tests / 50 steps, all pass. `test/integration_test.js` spins up the REAL HTTP server and exercises it — 401 without token, 400 on invalid JSON, 409 when secrets missing, 404 on unknown path, request-ID propagation
+- 2,302 lines across 10 files. **ZERO** TODO, FIXME, stubs, or 'not implemented' throws across 37 functions
+- **The only non-vacuous test suite in the ecosystem**: `bun test` -> 66 tests / 164 expect() calls across 6 files, all pass (measured 2026-09-15; the old figure of "7 tests / 50 steps" counted deno's top-level registrations, not the steps inside them). `test/integration_test.js` spins up the REAL HTTP server and exercises it — 401 without token, 400 on invalid JSON, 409 when secrets missing, 404 on unknown path, request-ID propagation
 - Per-IP sliding-window rate limiting is real and independently tested
 - The documented API matches the code exactly: `/health`, `/v1/secrets/status`, `/v1/authorize-start`, `/metrics`, `/v1/secrets/reload`
 - Fail-closed external policy contract implemented in `policy/engine.js`

@@ -5,7 +5,7 @@ const VALID_BACKENDS = new Set(["builtin", "external", "auto"]);
 const DEFAULT_EXTERNAL_TIMEOUT_MS = 1500;
 
 function parseIntegerEnv(name, defaultValue, min, max) {
-  const raw = Deno.env.get(name);
+  const raw = process.env[name];
   if (!raw || raw.trim().length === 0) {
     return defaultValue;
   }
@@ -91,7 +91,7 @@ function evaluateBuiltin(requiredSecrets, secretEnvName) {
 
   for (const secretName of requiredSecrets) {
     const envName = secretEnvName(secretName);
-    const value = Deno.env.get(envName);
+    const value = process.env[envName];
     if (!value || value.trim().length === 0) {
       missingSecretCount += 1;
     }
@@ -163,18 +163,17 @@ async function evaluateExternal(config, input, requiredSecrets) {
   let child;
   let timeoutId;
   try {
-    const command = new Deno.Command(config.externalCommand, {
-      args: config.externalCommandArgs,
-      stdin: "piped",
-      stdout: "piped",
-      stderr: "piped",
+    // Bun.spawn throws synchronously when the binary does not exist, which the
+    // surrounding try/catch turns into POLICY_ENGINE_UNAVAILABLE -- same
+    // fail-closed behaviour the previous runtime's spawn API had.
+    child = Bun.spawn([config.externalCommand, ...config.externalCommandArgs], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
     });
 
-    child = command.spawn();
-
-    const writer = child.stdin.getWriter();
-    await writer.write(encoder.encode(JSON.stringify(requestPayload)));
-    await writer.close();
+    child.stdin.write(encoder.encode(JSON.stringify(requestPayload)));
+    await child.stdin.end();
 
     const timeoutPromise = new Promise((_, reject) => {
       timeoutId = setTimeout(() => {
@@ -191,7 +190,18 @@ async function evaluateExternal(config, input, requiredSecrets) {
       }, config.externalTimeoutMs);
     });
 
-    const output = await Promise.race([child.output(), timeoutPromise]);
+    // Bun.spawn has no single-shot .output(): gather the exit code and stdout
+    // into one promise so the timeout race still has a single winner.
+    const collect = (async () => {
+      const stdout = new Uint8Array(await new Response(child.stdout).arrayBuffer());
+      const code = await child.exited;
+      return { code, stdout };
+    })();
+    // Mark the loser of the race as handled so a timeout cannot raise an
+    // unhandled rejection.
+    collect.catch(() => {});
+
+    const output = await Promise.race([collect, timeoutPromise]);
     clearTimeout(timeoutId);
 
     if (output.code !== 0) {
@@ -236,11 +246,11 @@ async function evaluateExternal(config, input, requiredSecrets) {
 }
 
 export function createPolicyEvaluator({ requiredSecrets, secretEnvName }) {
-  const requestedBackend = (Deno.env.get("ROKUR_POLICY_BACKEND") ?? "builtin")
+  const requestedBackend = (process.env.ROKUR_POLICY_BACKEND ?? "builtin")
     .trim().toLowerCase();
-  const externalCommand = (Deno.env.get("ROKUR_POLICY_COMMAND") ?? "").trim();
+  const externalCommand = (process.env.ROKUR_POLICY_COMMAND ?? "").trim();
   const externalCommandArgs = parseCommandArgs(
-    Deno.env.get("ROKUR_POLICY_COMMAND_ARGS") ?? "",
+    process.env.ROKUR_POLICY_COMMAND_ARGS ?? "",
   );
   const externalTimeoutMs = parseIntegerEnv(
     "ROKUR_POLICY_TIMEOUT_MS",

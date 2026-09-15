@@ -2,12 +2,10 @@
 // Integration tests for Rokur HTTP server.
 // Starts the actual server and tests all endpoints.
 
-import { assertEquals, assertExists } from "@std/assert";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 
-// Integration tests manage server subprocesses across beforeAll/afterAll boundaries,
-// which triggers Deno's resource leak sanitizer. Disable sanitizers for these suites.
-const suiteOpts = { sanitizeResources: false, sanitizeOps: false };
+// Integration tests manage server subprocesses across beforeAll/afterAll
+// boundaries; the subprocess deliberately outlives the assertions.
 
 const TEST_PORT = 19090;
 const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
@@ -28,13 +26,14 @@ async function waitForServer(url, maxAttempts = 30) {
   throw new Error(`Server at ${url} did not become ready`);
 }
 
-describe("Rokur HTTP integration", suiteOpts, () => {
+describe("Rokur HTTP integration", () => {
   beforeAll(async () => {
-    serverProcess = new Deno.Command("deno", {
-      args: ["run", "--allow-net", "--allow-env", "main.js"],
+    //  process.execPath is the bun binary running this suite; bun is not on
+    //  PATH in every environment, so spawning "bun" by name is not safe.
+    serverProcess = Bun.spawn([process.execPath, "main.js"], {
       cwd: new URL("..", import.meta.url).pathname,
       env: {
-        ...Deno.env.toObject(),
+        ...process.env,
         ROKUR_HOST: "127.0.0.1",
         ROKUR_PORT: String(TEST_PORT),
         ROKUR_ENV: "development",
@@ -46,9 +45,9 @@ describe("Rokur HTTP integration", suiteOpts, () => {
         ROKUR_REQUEST_LOG: "false",
         ROKUR_RATE_LIMIT_MAX: "1000",
       },
-      stdout: "null",
-      stderr: "null",
-    }).spawn();
+      stdout: "ignore",
+      stderr: "ignore",
+    });
 
     await waitForServer(BASE_URL);
   });
@@ -67,28 +66,28 @@ describe("Rokur HTTP integration", suiteOpts, () => {
 
   it("GET /health returns 200 with service info", async () => {
     const response = await fetch(`${BASE_URL}/health`);
-    assertEquals(response.status, 200);
+    expect(response.status).toEqual(200);
 
     const body = await response.json();
-    assertEquals(body.status, "ok");
-    assertEquals(body.service, "rokur");
-    assertEquals(body.policyConfigured, true);
-    assertEquals(body.tokenAuthEnabled, true);
-    assertEquals(body.requiredSecretCount, 2);
-    assertExists(body.timestamp);
-    assertExists(body.version);
+    expect(body.status).toEqual("ok");
+    expect(body.service).toEqual("rokur");
+    expect(body.policyConfigured).toEqual(true);
+    expect(body.tokenAuthEnabled).toEqual(true);
+    expect(body.requiredSecretCount).toEqual(2);
+    expect(body.timestamp).toBeDefined();
+    expect(body.version).toBeDefined();
   });
 
   it("GET /health does not require authentication", async () => {
     const response = await fetch(`${BASE_URL}/health`);
-    assertEquals(response.status, 200);
+    expect(response.status).toEqual(200);
   });
 
   it("GET /health returns x-request-id header", async () => {
     const response = await fetch(`${BASE_URL}/health`);
     const requestId = response.headers.get("x-request-id");
-    assertExists(requestId);
-    assertEquals(requestId.length > 0, true);
+    expect(requestId).toBeDefined();
+    expect(requestId.length > 0).toEqual(true);
   });
 
   it("GET /health forwards provided x-request-id", async () => {
@@ -96,7 +95,7 @@ describe("Rokur HTTP integration", suiteOpts, () => {
       headers: { "x-request-id": "custom-id-12345" },
     });
     const requestId = response.headers.get("x-request-id");
-    assertEquals(requestId, "custom-id-12345");
+    expect(requestId).toEqual("custom-id-12345");
   });
 
   // -----------------------------------------------------------------------
@@ -107,30 +106,30 @@ describe("Rokur HTTP integration", suiteOpts, () => {
     const response = await fetch(`${BASE_URL}/v1/secrets/status`, {
       headers: { "x-rokur-token": API_TOKEN },
     });
-    assertEquals(response.status, 200);
+    expect(response.status).toEqual(200);
 
     const body = await response.json();
-    assertEquals(body.allowed, true);
-    assertEquals(body.policy, "allow");
-    assertEquals(body.code, "AUTHORIZED");
-    assertEquals(body.requiredSecretCount, 2);
-    assertEquals(body.missingSecretCount, 0);
-    assertExists(body.requestId);
+    expect(body.allowed).toEqual(true);
+    expect(body.policy).toEqual("allow");
+    expect(body.code).toEqual("AUTHORIZED");
+    expect(body.requiredSecretCount).toEqual(2);
+    expect(body.missingSecretCount).toEqual(0);
+    expect(body.requestId).toBeDefined();
   });
 
   it("GET /v1/secrets/status returns 401 without token", async () => {
     const response = await fetch(`${BASE_URL}/v1/secrets/status`);
-    assertEquals(response.status, 401);
+    expect(response.status).toEqual(401);
 
     const body = await response.json();
-    assertEquals(body.error, "Unauthorized");
+    expect(body.error).toEqual("Unauthorized");
   });
 
   it("GET /v1/secrets/status returns 401 with wrong token", async () => {
     const response = await fetch(`${BASE_URL}/v1/secrets/status`, {
       headers: { "x-rokur-token": "wrong-token" },
     });
-    assertEquals(response.status, 401);
+    expect(response.status).toEqual(401);
   });
 
   // -----------------------------------------------------------------------
@@ -146,15 +145,15 @@ describe("Rokur HTTP integration", suiteOpts, () => {
       },
       body: JSON.stringify({ image: "alpine:3.19", name: "my-container" }),
     });
-    assertEquals(response.status, 200);
+    expect(response.status).toEqual(200);
 
     const body = await response.json();
-    assertEquals(body.allowed, true);
-    assertEquals(body.image, "alpine:3.19");
-    assertEquals(body.name, "my-container");
-    assertEquals(body.policyEngine, "builtin");
-    assertExists(body.decisionTimestamp);
-    assertExists(body.requestId);
+    expect(body.allowed).toEqual(true);
+    expect(body.image).toEqual("alpine:3.19");
+    expect(body.name).toEqual("my-container");
+    expect(body.policyEngine).toEqual("builtin");
+    expect(body.decisionTimestamp).toBeDefined();
+    expect(body.requestId).toBeDefined();
   });
 
   it("POST /v1/authorize-start returns 401 without token", async () => {
@@ -163,7 +162,7 @@ describe("Rokur HTTP integration", suiteOpts, () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ image: "alpine:3.19" }),
     });
-    assertEquals(response.status, 401);
+    expect(response.status).toEqual(401);
   });
 
   it("POST /v1/authorize-start returns 400 with invalid JSON", async () => {
@@ -175,10 +174,10 @@ describe("Rokur HTTP integration", suiteOpts, () => {
       },
       body: "not json",
     });
-    assertEquals(response.status, 400);
+    expect(response.status).toEqual(400);
 
     const body = await response.json();
-    assertEquals(body.error, "Invalid JSON body");
+    expect(body.error).toEqual("Invalid JSON body");
   });
 
   it("POST /v1/authorize-start handles missing image/name gracefully", async () => {
@@ -190,12 +189,12 @@ describe("Rokur HTTP integration", suiteOpts, () => {
       },
       body: JSON.stringify({}),
     });
-    assertEquals(response.status, 200);
+    expect(response.status).toEqual(200);
 
     const body = await response.json();
-    assertEquals(body.allowed, true);
-    assertEquals(body.image, null);
-    assertEquals(body.name, null);
+    expect(body.allowed).toEqual(true);
+    expect(body.image).toEqual(null);
+    expect(body.name).toEqual(null);
   });
 
   // -----------------------------------------------------------------------
@@ -204,23 +203,23 @@ describe("Rokur HTTP integration", suiteOpts, () => {
 
   it("GET /metrics returns counters and config", async () => {
     const response = await fetch(`${BASE_URL}/metrics`);
-    assertEquals(response.status, 200);
+    expect(response.status).toEqual(200);
 
     const body = await response.json();
-    assertEquals(body.service, "rokur");
-    assertExists(body.uptime_ms);
-    assertExists(body.started_at);
-    assertEquals(typeof body.requests_total, "number");
-    assertEquals(typeof body.authorizations_allowed, "number");
-    assertEquals(typeof body.authorizations_denied, "number");
-    assertEquals(typeof body.auth_failures, "number");
-    assertEquals(body.required_secret_count, 2);
-    assertExists(body.rate_limiter);
+    expect(body.service).toEqual("rokur");
+    expect(body.uptime_ms).toBeDefined();
+    expect(body.started_at).toBeDefined();
+    expect(typeof body.requests_total).toEqual("number");
+    expect(typeof body.authorizations_allowed).toEqual("number");
+    expect(typeof body.authorizations_denied).toEqual("number");
+    expect(typeof body.auth_failures).toEqual("number");
+    expect(body.required_secret_count).toEqual(2);
+    expect(body.rate_limiter).toBeDefined();
   });
 
   it("GET /metrics does not require authentication", async () => {
     const response = await fetch(`${BASE_URL}/metrics`);
-    assertEquals(response.status, 200);
+    expect(response.status).toEqual(200);
   });
 
   // -----------------------------------------------------------------------
@@ -231,7 +230,7 @@ describe("Rokur HTTP integration", suiteOpts, () => {
     const response = await fetch(`${BASE_URL}/v1/secrets/reload`, {
       method: "POST",
     });
-    assertEquals(response.status, 401);
+    expect(response.status).toEqual(401);
   });
 
   it("POST /v1/secrets/reload succeeds with valid token", async () => {
@@ -239,13 +238,13 @@ describe("Rokur HTTP integration", suiteOpts, () => {
       method: "POST",
       headers: { "x-rokur-token": API_TOKEN },
     });
-    assertEquals(response.status, 200);
+    expect(response.status).toEqual(200);
 
     const body = await response.json();
-    assertEquals(body.status, "reloaded");
-    assertEquals(typeof body.previousRequiredSecretCount, "number");
-    assertEquals(typeof body.currentRequiredSecretCount, "number");
-    assertExists(body.requestId);
+    expect(body.status).toEqual("reloaded");
+    expect(typeof body.previousRequiredSecretCount).toEqual("number");
+    expect(typeof body.currentRequiredSecretCount).toEqual("number");
+    expect(body.requestId).toBeDefined();
   });
 
   // -----------------------------------------------------------------------
@@ -254,16 +253,16 @@ describe("Rokur HTTP integration", suiteOpts, () => {
 
   it("returns 404 for unknown paths", async () => {
     const response = await fetch(`${BASE_URL}/unknown/path`);
-    assertEquals(response.status, 404);
+    expect(response.status).toEqual(404);
 
     const body = await response.json();
-    assertEquals(body.error, "Not Found");
-    assertEquals(body.path, "/unknown/path");
+    expect(body.error).toEqual("Not Found");
+    expect(body.path).toEqual("/unknown/path");
   });
 
   it("returns 404 for wrong HTTP method", async () => {
     const response = await fetch(`${BASE_URL}/v1/authorize-start`);
-    assertEquals(response.status, 404);
+    expect(response.status).toEqual(404);
   });
 
   // -----------------------------------------------------------------------
@@ -275,10 +274,10 @@ describe("Rokur HTTP integration", suiteOpts, () => {
       headers: { "x-rokur-token": API_TOKEN },
     });
     const requestId = response.headers.get("x-request-id");
-    assertExists(requestId);
+    expect(requestId).toBeDefined();
 
     const body = await response.json();
-    assertEquals(body.requestId, requestId);
+    expect(body.requestId).toEqual(requestId);
   });
 
   it("uses provided request ID", async () => {
@@ -288,24 +287,25 @@ describe("Rokur HTTP integration", suiteOpts, () => {
         "x-request-id": "trace-abc-999",
       },
     });
-    assertEquals(response.headers.get("x-request-id"), "trace-abc-999");
+    expect(response.headers.get("x-request-id")).toEqual("trace-abc-999");
 
     const body = await response.json();
-    assertEquals(body.requestId, "trace-abc-999");
+    expect(body.requestId).toEqual("trace-abc-999");
   });
 });
 
-describe("Rokur with missing secrets", suiteOpts, () => {
+describe("Rokur with missing secrets", () => {
   let serverProcess;
   const port = 19091;
   const url = `http://127.0.0.1:${port}`;
 
   beforeAll(async () => {
-    serverProcess = new Deno.Command("deno", {
-      args: ["run", "--allow-net", "--allow-env", "main.js"],
+    //  process.execPath is the bun binary running this suite; bun is not on
+    //  PATH in every environment, so spawning "bun" by name is not safe.
+    serverProcess = Bun.spawn([process.execPath, "main.js"], {
       cwd: new URL("..", import.meta.url).pathname,
       env: {
-        ...Deno.env.toObject(),
+        ...process.env,
         ROKUR_HOST: "127.0.0.1",
         ROKUR_PORT: String(port),
         ROKUR_ENV: "development",
@@ -316,9 +316,9 @@ describe("Rokur with missing secrets", suiteOpts, () => {
         ROKUR_AUDIT_LOG: "false",
         ROKUR_REQUEST_LOG: "false",
       },
-      stdout: "null",
-      stderr: "null",
-    }).spawn();
+      stdout: "ignore",
+      stderr: "ignore",
+    });
 
     // Wait for server readiness.
     for (let i = 0; i < 30; i++) {
@@ -338,12 +338,12 @@ describe("Rokur with missing secrets", suiteOpts, () => {
 
   it("returns 409 when secrets are missing", async () => {
     const response = await fetch(`${url}/v1/secrets/status`);
-    assertEquals(response.status, 409);
+    expect(response.status).toEqual(409);
 
     const body = await response.json();
-    assertEquals(body.allowed, false);
-    assertEquals(body.policy, "deny");
-    assertEquals(body.missingSecretCount, 1);
+    expect(body.allowed).toEqual(false);
+    expect(body.policy).toEqual("deny");
+    expect(body.missingSecretCount).toEqual(1);
   });
 
   it("authorize-start also denies with missing secrets", async () => {
@@ -352,10 +352,10 @@ describe("Rokur with missing secrets", suiteOpts, () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ image: "nginx:latest" }),
     });
-    assertEquals(response.status, 409);
+    expect(response.status).toEqual(409);
 
     const body = await response.json();
-    assertEquals(body.allowed, false);
-    assertEquals(body.image, "nginx:latest");
+    expect(body.allowed).toEqual(false);
+    expect(body.image).toEqual("nginx:latest");
   });
 });
