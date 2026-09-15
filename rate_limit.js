@@ -44,9 +44,10 @@ export function createRateLimiter() {
   }, windowMs * 2);
 
   // Prevent cleanup timer from keeping the process alive.
-  if (typeof cleanupInterval === "number") {
-    Deno.unrefTimer(cleanupInterval);
-  }
+  // Under bun setInterval() returns a Timeout OBJECT, not a number, so the old
+  // `typeof cleanupInterval === "number"` guard asked a question that is always
+  // false here and the timer was never unref-ed.
+  cleanupInterval.unref?.();
 
   return {
     /**
@@ -182,7 +183,7 @@ function pruneMap(map, cutoff) {
  * @returns {number}
  */
 function parsePositiveInt(name, defaultValue) {
-  const raw = Deno.env.get(name);
+  const raw = process.env[name];
   if (!raw || raw.trim().length === 0) {
     return defaultValue;
   }

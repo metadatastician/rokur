@@ -24,14 +24,14 @@ function parseConfigPath(args) {
   if (i !== -1) {
     if (i + 1 >= args.length) {
       console.error("rokur: --config requires a path");
-      Deno.exit(1);
+      process.exit(1);
     }
     return args[i + 1];
   }
   return undefined;
 }
 
-const configPath = parseConfigPath(Deno.args);
+const configPath = parseConfigPath(process.argv.slice(2));
 
 //  FAIL CLOSED at startup. loadConfig throws if a config file was named and
 //  could not be fully understood; a secrets gate that starts on a
@@ -46,7 +46,7 @@ try {
     error: error.message,
     service: "rokur",
   }));
-  Deno.exit(1);
+  process.exit(1);
 }
 
 function secretEnvName(secretName) {
@@ -86,7 +86,7 @@ function fatalConfigurationError(message) {
     port: config.port,
     environment: config.env,
   }));
-  Deno.exit(1);
+  process.exit(1);
 }
 
 function validateStartupConfiguration() {
@@ -163,10 +163,12 @@ function generateRequestId() {
  * Extracts client IP from request, respecting X-Forwarded-For when behind
  * a trusted proxy (ROKUR_TRUST_PROXY=true).
  */
-function getClientIp(request, connInfo) {
-  const directIp = connInfo?.remoteAddr?.hostname ?? "unknown";
+function getClientIp(request, server) {
+  // Bun passes the Server as the second fetch() argument; requestIP() returns
+  // null once the socket is gone, hence the optional chain.
+  const directIp = server?.requestIP?.(request)?.address ?? "unknown";
 
-  const trustProxy = (Deno.env.get("ROKUR_TRUST_PROXY") ?? "").trim()
+  const trustProxy = (process.env.ROKUR_TRUST_PROXY ?? "").trim()
     .toLowerCase();
   if (
     trustProxy === "1" || trustProxy === "true" || trustProxy === "yes" ||
@@ -248,6 +250,58 @@ function handleHealth(requestId) {
       timestamp: new Date().toISOString(),
     },
     200,
+    { "x-request-id": requestId },
+  );
+}
+
+/**
+ * Readiness probe (R-23 liveness/readiness split).
+ *
+ * /health above is UNCONDITIONALLY 200 -- it answers "is this process alive?".
+ * This endpoint answers the different question "can this process do its job?",
+ * so it carries the dependency-state predicate: the policy evaluator must be
+ * reachable AND every required secret must be present. 503 tells an
+ * orchestrator to hold traffic off a gate that would deny every request.
+ *
+ * Deliberately unauthenticated -- a kubelet/podman probe cannot carry a bearer
+ * token -- and deliberately NOT delegated to handleSecretsStatus, which writes
+ * an audit record and bumps the authorization counters: a probe firing every
+ * few seconds must not pollute the audit trail or the metrics.
+ */
+async function handleReady(requestId) {
+  let decision;
+  try {
+    decision = await policyEvaluator.evaluate({});
+  } catch (error) {
+    return jsonResponse(
+      {
+        status: "not_ready",
+        service: "rokur",
+        code: "POLICY_ENGINE_UNAVAILABLE",
+        error: error instanceof Error ? error.message : String(error),
+        timestamp: new Date().toISOString(),
+      },
+      503,
+      { "x-request-id": requestId },
+    );
+  }
+
+  const ready = decision.allowed === true;
+  return jsonResponse(
+    {
+      status: ready ? "ready" : "not_ready",
+      service: "rokur",
+      code: decision.code,
+      policyBackend: policyEvaluator.config.resolvedBackend,
+      requiredSecretCount: typeof decision.requiredSecretCount === "number"
+        ? decision.requiredSecretCount
+        : config.requiredSecrets.length,
+      missingSecretCount: typeof decision.missingSecretCount === "number"
+        ? decision.missingSecretCount
+        : (ready ? 0 : config.requiredSecrets.length),
+      timestamp: new Date().toISOString(),
+    },
+    ready ? 200 : 503,
     { "x-request-id": requestId },
   );
 }
@@ -417,9 +471,9 @@ function handleReloadSecrets(request, requestId, clientIp) {
 // Server handler
 // ---------------------------------------------------------------------------
 
-const serverHandler = async (request, connInfo) => {
+const serverHandler = async (request, server) => {
   const requestId = request.headers.get("x-request-id") || generateRequestId();
-  const clientIp = getClientIp(request, connInfo);
+  const clientIp = getClientIp(request, server);
   const url = new URL(request.url);
   const { pathname } = url;
   const method = request.method.toUpperCase();
@@ -427,8 +481,13 @@ const serverHandler = async (request, connInfo) => {
 
   metrics.requestsTotal += 1;
 
-  // Rate limit check (skip health and metrics — they are public/operational).
-  if (pathname !== "/health" && pathname !== "/metrics") {
+  //  Rate limit check (skip the probes and metrics — they are
+  //  public/operational). The exemption MUST ask the same question the
+  //  dispatcher below asks: with ROKUR_HEALTH_PATH=/healthz the old literal
+  //  "/health" comparison rate limited the very endpoint it meant to exempt.
+  const isProbePath = pathname === config.healthPath ||
+    pathname === config.readyPath;
+  if (!isProbePath && pathname !== "/metrics") {
     const rateCheck = rateLimiter.checkRequest(clientIp);
     if (!rateCheck.allowed) {
       metrics.rateLimitDenials += 1;
@@ -467,6 +526,8 @@ const serverHandler = async (request, connInfo) => {
   let response;
   if (method === "GET" && pathname === config.healthPath) {
     response = handleHealth(requestId);
+  } else if (method === "GET" && pathname === config.readyPath) {
+    response = await handleReady(requestId);
   } else if (method === "GET" && pathname === "/v1/secrets/status") {
     response = await handleSecretsStatus(request, requestId, clientIp);
   } else if (method === "POST" && pathname === "/v1/authorize-start") {
@@ -508,7 +569,9 @@ const serverHandler = async (request, connInfo) => {
 // Graceful shutdown
 // ---------------------------------------------------------------------------
 
-const abortController = new AbortController();
+//  Bun.serve() takes no AbortSignal: the returned Server is the shutdown
+//  handle, so it is declared here and assigned at startup below.
+let server = null;
 
 function initiateShutdown(signal) {
   console.log(JSON.stringify({
@@ -516,15 +579,15 @@ function initiateShutdown(signal) {
     message: `Received ${signal}, shutting down gracefully`,
     service: "rokur",
   }));
-  abortController.abort();
+  server?.stop();
   closeAuditLog();
 }
 
-Deno.addSignalListener("SIGTERM", () => initiateShutdown("SIGTERM"));
-Deno.addSignalListener("SIGINT", () => initiateShutdown("SIGINT"));
+process.on("SIGTERM", () => initiateShutdown("SIGTERM"));
+process.on("SIGINT", () => initiateShutdown("SIGINT"));
 
 // SIGHUP triggers a full config reload without restart.
-Deno.addSignalListener("SIGHUP", () => {
+process.on("SIGHUP", () => {
   const previousCount = config.requiredSecrets.length;
   //  A bad file here does NOT take the process down: the existing catch keeps
   //  the previous configuration, which is the right call mid-flight -- unlike
@@ -578,15 +641,16 @@ console.log(JSON.stringify({
   service: "rokur",
 }));
 
-Deno.serve({
+server = Bun.serve({
   hostname: config.host,
   port: config.port,
-  signal: abortController.signal,
-  onListen({ hostname, port }) {
-    console.log(JSON.stringify({
-      level: "INFO",
-      message: `Rokur listening on ${hostname}:${port}`,
-      service: "rokur",
-    }));
-  },
-}, serverHandler);
+  fetch: serverHandler,
+});
+
+//  Bun.serve() has no onListen callback and returns only once it is bound, so
+//  the listening line is logged here rather than from a hook.
+console.log(JSON.stringify({
+  level: "INFO",
+  message: `Rokur listening on ${server.hostname}:${server.port}`,
+  service: "rokur",
+}));

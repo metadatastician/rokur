@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
-import { parse as parseToml } from "@std/toml";
+import { parse as parseToml } from "smol-toml";
+import { readFileSync } from "node:fs";
 // Rokur configuration — centralised environment variable parsing.
 //
-// All Deno.env.get() calls for Rokur configuration are consolidated here.
+// All process.env reads for Rokur configuration are consolidated here.
 // Call loadConfig() at startup and again on SIGHUP to pick up changes.
 
 /**
@@ -17,7 +18,7 @@ import { parse as parseToml } from "@std/toml";
  * @returns {boolean}
  */
 function parseBooleanEnv(name, defaultValue = false) {
-  const rawValue = Deno.env.get(name);
+  const rawValue = process.env[name];
   if (
     rawValue === undefined || rawValue === null || rawValue.trim().length === 0
   ) {
@@ -54,7 +55,7 @@ function parseBooleanEnv(name, defaultValue = false) {
  * @returns {string[]}
  */
 function parseRequiredSecrets(fileValue) {
-  const raw = Deno.env.get("ROKUR_REQUIRED_SECRETS");
+  const raw = process.env.ROKUR_REQUIRED_SECRETS;
   // env wins; else the file's array verbatim; else empty
   if ((raw ?? "").trim().length === 0 && Array.isArray(fileValue)) {
     return Array.from(new Set(fileValue.map((v) => v.trim()).filter((v) => v.length > 0)));
@@ -77,7 +78,7 @@ function parseRequiredSecrets(fileValue) {
  * @returns {number}
  */
 function parsePositiveInt(name, defaultValue, fileValue) {
-  const raw = Deno.env.get(name);
+  const raw = process.env[name];
   if (!raw || raw.trim().length === 0) {
     // No env var: fall back to the file, then the built-in default.
     if (Number.isInteger(fileValue) && fileValue >= 1) return fileValue;
@@ -95,13 +96,13 @@ function parsePositiveInt(name, defaultValue, fileValue) {
 /**
  * Env lookup that treats an EMPTY value as absent.
  *
- * `Deno.env.get("X") ?? fileValue` is wrong: `??` falls through only on
+ * `process.env.X ?? fileValue` is wrong: `??` falls through only on
  * null/undefined, so `X=""` yields "" and shadows the file. Empty and unset
  * mean the same thing for configuration, and the rest of this module already
  * treats them alike (see parsePositiveInt).
  */
 function envOr(name) {
-  const raw = Deno.env.get(name);
+  const raw = process.env[name];
   return raw === undefined || raw.trim().length === 0 ? undefined : raw;
 }
 
@@ -196,12 +197,12 @@ function assertKnownEntry(table, key, value, known, path) {
  * worse than not starting at all.
  *
  * @param {string} path
- * @returns {object} flat overrides, e.g. { port: 9090, requiredSecrets: [...] }
+ * @returns {object} flat overrides, e.g. { port: 7658, requiredSecrets: [...] }
  */
 export function loadTomlFile(path) {
   let text;
   try {
-    text = Deno.readTextFileSync(path);
+    text = readFileSync(path, "utf8");
   } catch (err) {
     throw new Error(`rokur: cannot read config file ${path}: ${err.message}`);
   }
@@ -239,13 +240,13 @@ export function loadConfig(options = {}) {
   //  override a file shipped in an image.
   const fileCfg = options.configPath ? loadTomlFile(options.configPath) : {};
 
-  const host = envOr("ROKUR_HOST") ?? fileCfg.host ?? "127.0.0.1";
-  const port = Number(envOr("ROKUR_PORT") ?? fileCfg.port ?? "9090");
+  const host = envOr("ROKUR_HOST") ?? fileCfg.host ?? "0.0.0.0";
+  const port = Number(envOr("ROKUR_PORT") ?? fileCfg.port ?? "7658");
   const healthPath = envOr("ROKUR_HEALTH_PATH") ?? fileCfg.healthPath ?? "/health";
   const readyPath = envOr("ROKUR_READY_PATH") ?? fileCfg.readyPath ?? "/ready";
-  const apiToken = (Deno.env.get("ROKUR_API_TOKEN") ?? "").trim();
+  const apiToken = (process.env.ROKUR_API_TOKEN ?? "").trim();
   const requiredSecrets = parseRequiredSecrets(fileCfg.requiredSecrets);
-  const env = (Deno.env.get("ROKUR_ENV") ?? "development").trim().toLowerCase();
+  const env = (process.env.ROKUR_ENV ?? "development").trim().toLowerCase();
 
   const policyBackend = (envOr("ROKUR_POLICY_BACKEND") ?? fileCfg.policyBackend ?? "builtin")
     .trim().toLowerCase();
@@ -259,7 +260,7 @@ export function loadConfig(options = {}) {
   const rateLimitAuthFailMax = parsePositiveInt("ROKUR_RATE_LIMIT_AUTH_FAIL_MAX", 5, fileCfg.rateLimitAuthFailMax);
 
   const auditLogEnabled = parseBooleanEnv("ROKUR_AUDIT_LOG", true);
-  const auditLogPath = (Deno.env.get("ROKUR_AUDIT_LOG_PATH") ?? "").trim();
+  const auditLogPath = (process.env.ROKUR_AUDIT_LOG_PATH ?? "").trim();
   const requestLogEnabled = parseBooleanEnv("ROKUR_REQUEST_LOG", true);
 
   const allowUnauthenticated = parseBooleanEnv(

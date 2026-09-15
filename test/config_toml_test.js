@@ -6,13 +6,17 @@
 //   2. anything not fully understood THROWS (fail closed)
 //   3. [server] backend is rejected outright -- rokur is not a proxy
 
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { loadConfig, loadTomlFile } from "../config.js";
 
 /** Write a temp TOML file and hand back its path. */
 function tmpToml(body) {
-  const path = Deno.makeTempFileSync({ suffix: ".toml" });
-  Deno.writeTextFileSync(path, body);
+  const dir = mkdtempSync(join(tmpdir(), "rokur-toml-"));
+  const path = join(dir, "rokur.toml");
+  writeFileSync(path, body);
   return path;
 }
 
@@ -20,28 +24,28 @@ function tmpToml(body) {
 function withEnv(vars, fn) {
   const saved = new Map();
   for (const [k, v] of Object.entries(vars)) {
-    saved.set(k, Deno.env.get(k));
-    if (v === undefined) Deno.env.delete(k);
-    else Deno.env.set(k, v);
+    saved.set(k, process.env[k]);
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
   }
   try {
     return fn();
   } finally {
     for (const [k, v] of saved) {
-      if (v === undefined) Deno.env.delete(k);
-      else Deno.env.set(k, v);
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
     }
   }
 }
 
-Deno.test("loadTomlFile: reads a well-formed config", () => {
+test("loadTomlFile: reads a well-formed config", () => {
   const p = tmpToml(`
 [metadata]
 name = "rokur-gate"
 
 [server]
 host = "0.0.0.0"
-port = 9090
+port = 7658
 health_path = "/healthz"
 
 [secrets]
@@ -51,25 +55,24 @@ required = ["DB_PASSWORD", "API_KEY"]
 max = 120
 `);
   const cfg = loadTomlFile(p);
-  assertEquals(cfg.host, "0.0.0.0");
-  assertEquals(cfg.port, 9090);
-  assertEquals(cfg.healthPath, "/healthz");
-  assertEquals(cfg.requiredSecrets, ["DB_PASSWORD", "API_KEY"]);
-  assertEquals(cfg.rateLimitMax, 120);
+  expect(cfg.host).toEqual("0.0.0.0");
+  expect(cfg.port).toEqual(7658);
+  expect(cfg.healthPath).toEqual("/healthz");
+  expect(cfg.requiredSecrets).toEqual(["DB_PASSWORD", "API_KEY"]);
+  expect(cfg.rateLimitMax).toEqual(120);
 });
 
-Deno.test("loadTomlFile: REJECTS [server] backend -- rokur is not a proxy", () => {
+test("loadTomlFile: REJECTS [server] backend -- rokur is not a proxy", () => {
   const p = tmpToml(`[server]\nbackend = "http://app:8080"\n`);
-  const err = assertThrows(() => loadTomlFile(p), Error);
-  assert(
-    err.message.includes("not a proxy"),
-    `expected the proxy explanation, got: ${err.message}`,
-  );
+  // expect(fn).toThrow() returns nothing (unlike assertThrows, which returned
+  // the error), so the type and the message are asserted as two checks.
+  expect(() => loadTomlFile(p)).toThrow(Error);
+  expect(() => loadTomlFile(p)).toThrow(/not a proxy/);
 });
 
 /** Assert that a rokur.toml body is rejected with a message containing `needle`. */
 function assertTomlRejected(body, needle) {
-  assertThrows(() => loadTomlFile(tmpToml(body)), Error, needle);
+  expect(() => loadTomlFile(tmpToml(body))).toThrow(needle);
 }
 
 // Part 2 of the contract: anything not fully understood THROWS. These four
@@ -89,57 +92,53 @@ const REJECTED_TOML = [
   ],
   [
     "loadTomlFile: wrong type throws",
-    '[server]\nport = "9090"\n',
+    '[server]\nport = "7658"\n',
     "must be number",
   ],
   [
     "loadTomlFile: malformed TOML throws",
-    "[server\nport = 9090\n",
+    "[server\nport = 7658\n",
     "not valid TOML",
   ],
 ];
 
 for (const [name, body, needle] of REJECTED_TOML) {
-  Deno.test(name, () => assertTomlRejected(body, needle));
+  test(name, () => assertTomlRejected(body, needle));
 }
 
-Deno.test("loadTomlFile: missing file throws", () => {
-  assertThrows(
-    () => loadTomlFile("/nonexistent/rokur.toml"),
-    Error,
-    "cannot read config file",
-  );
+test("loadTomlFile: missing file throws", () => {
+  expect(() => loadTomlFile("/nonexistent/rokur.toml")).toThrow("cannot read config file");
 });
 
-Deno.test("precedence: env BEATS file", () => {
+test("precedence: env BEATS file", () => {
   const p = tmpToml(`[server]\nport = 7777\n`);
   withEnv({ ROKUR_PORT: "8888" }, () => {
-    assertEquals(loadConfig({ configPath: p }).port, 8888);
+    expect(loadConfig({ configPath: p }).port).toEqual(8888);
   });
 });
 
-Deno.test("precedence: file beats default when env is unset", () => {
+test("precedence: file beats default when env is unset", () => {
   const p = tmpToml(`[server]\nport = 7777\n`);
   withEnv({ ROKUR_PORT: undefined }, () => {
-    assertEquals(loadConfig({ configPath: p }).port, 7777);
+    expect(loadConfig({ configPath: p }).port).toEqual(7777);
   });
 });
 
-Deno.test("precedence: default applies with neither env nor file", () => {
+test("precedence: default applies with neither env nor file", () => {
   withEnv({ ROKUR_PORT: undefined }, () => {
-    assertEquals(loadConfig().port, 9090);
+    expect(loadConfig().port).toEqual(7658);
   });
 });
 
-Deno.test("no config file: behaviour is unchanged (env-only)", () => {
+test("no config file: behaviour is unchanged (env-only)", () => {
   withEnv({ ROKUR_HOST: "127.0.0.2" }, () => {
-    assertEquals(loadConfig().host, "127.0.0.2");
+    expect(loadConfig().host).toEqual("127.0.0.2");
   });
 });
 
-Deno.test("required secrets: file list is honoured when env is unset", () => {
+test("required secrets: file list is honoured when env is unset", () => {
   const p = tmpToml(`[secrets]\nrequired = ["ONE", "TWO"]\n`);
   withEnv({ ROKUR_REQUIRED_SECRETS: undefined }, () => {
-    assertEquals(loadConfig({ configPath: p }).requiredSecrets, ["ONE", "TWO"]);
+    expect(loadConfig({ configPath: p }).requiredSecrets).toEqual(["ONE", "TWO"]);
   });
 });

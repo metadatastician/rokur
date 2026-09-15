@@ -1,70 +1,77 @@
 # SPDX-License-Identifier: MPL-2.0
 # Containerfile — Multi-stage build for Rokur secrets management gate.
-# Runtime: Deno on Chainguard Wolfi base.
+# Runtime: Bun on Chainguard Wolfi base.
 
 # ---------------------------------------------------------------------------
-# Stage 1: Build — install Deno runtime
+# Stage 1: Build — install the Bun runtime
 # ---------------------------------------------------------------------------
 FROM cgr.dev/chainguard/wolfi-base:latest AS build
 
 RUN apk add --no-cache curl unzip
 
-# Install Deno (pinned version for reproducibility).
-# Using direct binary download from GitHub releases — the previous
-# `deno.land/install-manual@vX.Y.Z.sh` URL doesn't return a parseable
-# install script (sh hits "syntax error: unexpected redirection" when
-# piping its content).
-ARG DENO_VERSION=2.2.8
-RUN curl -fsSL "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" \
-        -o /tmp/deno.zip \
-    && unzip /tmp/deno.zip -d /usr/local/bin \
-    && rm /tmp/deno.zip \
-    && chmod +x /usr/local/bin/deno
+# Install Bun (pinned version for reproducibility).
+#
+# `unzip -j ... -d DIR`, never `install`: /usr/local/bin does not exist in
+# wolfi-base. `unzip -d` creates it; `install` without -D does not. `-j` junks
+# the archive path because bun's zip nests its binary under bun-linux-x64/.
+#
+# The trailing `bun --version` is deliberate and load-bearing: it makes a
+# wrong-architecture or truncated download fail at BUILD time rather than at
+# the first request in production.
+ARG BUN_VERSION=1.4.1
+RUN curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" \
+        -o /tmp/bun.zip \
+    && unzip -j /tmp/bun.zip 'bun-linux-x64/bun' -d /usr/local/bin \
+    && rm /tmp/bun.zip \
+    && chmod +x /usr/local/bin/bun \
+    && /usr/local/bin/bun --version
 
-# Pre-cache dependencies by copying deno.json first.
+# Install dependencies from the lockfile before copying source, so a source-only
+# change does not invalidate the dependency layer.
 WORKDIR /build
-COPY deno.json deno.lock ./
-RUN deno cache --lock=deno.lock deno.json || true
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --production
 
 # Copy application source.
-COPY main.js audit.js rate_limit.js ./
+COPY main.js config.js audit.js rate_limit.js ./
 COPY policy/ ./policy/
-
-# Cache all module imports so the runtime image needs no network.
-RUN deno cache main.js
 
 # ---------------------------------------------------------------------------
 # Stage 2: Runtime — minimal image with only what is needed
 # ---------------------------------------------------------------------------
 FROM cgr.dev/chainguard/wolfi-base:latest AS runtime
 
-RUN apk add --no-cache libgcc
-
-# Copy Deno binary from build stage.
-COPY --from=build /usr/local/bin/deno /usr/local/bin/deno
+# No `apk add` here, and that is measured rather than assumed: bun needs only
+# libc/libdl/libm/libpthread, all glibc and all already present in wolfi-base.
+# The deno stage this replaces required `apk add libgcc`; the bun runtime stage
+# is strictly simpler.
+COPY --from=build /usr/local/bin/bun /usr/local/bin/bun
 
 # Create non-root user for the service.
 RUN addgroup -S rokur && adduser -S -G rokur rokur
 
 WORKDIR /app
 
-# Copy application files.
-COPY --from=build /build/main.js /build/audit.js /build/rate_limit.js ./
+# Copy application files and the resolved dependency tree.
+COPY --from=build /build/main.js /build/config.js /build/audit.js /build/rate_limit.js ./
 COPY --from=build /build/policy/ ./policy/
-COPY --from=build /build/deno.json /build/deno.lock ./
+COPY --from=build /build/package.json /build/bun.lock ./
+COPY --from=build /build/node_modules/ ./node_modules/
 
-# Copy Deno cache so no network access is required at runtime.
-COPY --from=build /root/.cache/deno /home/rokur/.cache/deno
-RUN chown -R rokur:rokur /app /home/rokur/.cache
+RUN chown -R rokur:rokur /app
 
 USER rokur
 
-# Rokur listens on port 9090 by default (ROKUR_PORT).
-EXPOSE 9090
+# Rokur listens on port 7658 by default (ROKUR_PORT).
+EXPOSE 7658
 
 # Health check against the /health endpoint.
+#
+# `bun -e` rather than curl: this image has NO HTTP client at all. Neither curl
+# nor wget is present in wolfi-base, and none is installed above. A `curl -f`
+# healthcheck here would fail permanently and mark the container unhealthy
+# forever, which is worse than having no healthcheck.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=5s --retries=3 \
-    CMD deno eval "const r = await fetch('http://127.0.0.1:9090/health'); Deno.exit(r.ok ? 0 : 1)"
+    CMD bun -e "const r = await fetch('http://127.0.0.1:7658/health'); process.exit(r.ok ? 0 : 1)"
 
-# Fail-closed: minimal permissions.  --allow-write is for audit logs only.
-ENTRYPOINT ["deno", "run", "--allow-net", "--allow-env", "--allow-read", "--allow-write", "main.js"]
+ENTRYPOINT ["bun", "run", "main.js"]

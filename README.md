@@ -107,7 +107,7 @@ Every authorization decision and authentication failure is recorded:
 | Variable                             | Default       | Description                                     |
 | ------------------------------------ | ------------- | ----------------------------------------------- |
 | `ROKUR_HOST`                         | `127.0.0.1`   | Bind host                                       |
-| `ROKUR_PORT`                         | `9090`        | Bind port                                       |
+| `ROKUR_PORT`                         | `7658`        | Bind port                                       |
 | `ROKUR_ENV`                          | `development` | Environment (`production` enforces strict mode) |
 | `ROKUR_API_TOKEN`                    | _(required)_  | API authentication token                        |
 | `ROKUR_REQUIRED_SECRETS`             | _(required)_  | Comma-separated secret names                    |
@@ -136,30 +136,28 @@ export ROKUR_REQUIRED_SECRETS=panic_profile,panll_api_token
 export ROKUR_SECRET_PANIC_PROFILE=enabled
 export ROKUR_SECRET_PANLL_API_TOKEN=abc123
 export ROKUR_API_TOKEN=dev-token
-deno task dev
+bun run dev
 
 # Run tests
-deno task test
+bun test
 
 # Run unit tests only
-deno task test:unit
+bun run test:unit
 
 # Run integration tests only
-deno task test:integration
-
-# Type check
-deno task check
-
-# Lint and format
-deno task lint
-deno task fmt:check
+bun run test:integration
 ```
+
+There is no type-check or lint task. The repo is plain JavaScript, so there is
+nothing for a type checker to do, and no formatter is pinned yet — adding an
+unpinned `bun x` fetch at task time would be a supply-chain surface the rest of
+the estate does not accept. Choosing a pinned formatter is a separate change.
 
 ## External-Policy Example (Ephapax Adapter Slot)
 
 ```bash
 export ROKUR_POLICY_BACKEND=external
-export ROKUR_POLICY_COMMAND=deno
-export ROKUR_POLICY_COMMAND_ARGS='["run","--quiet","policy/ephapax_adapter_example.js"]'
-deno task dev:external
+export ROKUR_POLICY_COMMAND=bun
+export ROKUR_POLICY_COMMAND_ARGS='["run","policy/ephapax_adapter_example.js"]'
+bun run dev:external
 ```

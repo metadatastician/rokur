@@ -6,10 +6,10 @@
 // a real subprocess, a real socket, a port and health path that exist ONLY in
 // the TOML and in no environment variable.
 
-import { assertEquals } from "@std/assert";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
-
-const suiteOpts = { sanitizeResources: false, sanitizeOps: false };
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const FILE_PORT = 19096;
 const BASE_URL = `http://127.0.0.1:${FILE_PORT}`;
@@ -17,6 +17,7 @@ const REPO_ROOT = new URL("..", import.meta.url).pathname;
 
 let serverProcess;
 let configPath;
+let configDir;
 
 async function waitFor(url, maxAttempts = 40) {
   for (let i = 0; i < maxAttempts; i++) {
@@ -29,12 +30,13 @@ async function waitFor(url, maxAttempts = 40) {
   throw new Error(`${url} did not become ready`);
 }
 
-describe("rokur boots from rokur.toml", suiteOpts, () => {
+describe("rokur boots from rokur.toml", () => {
   beforeAll(async () => {
-    configPath = Deno.makeTempFileSync({ suffix: ".toml" });
+    configDir = mkdtempSync(join(tmpdir(), "rokur-cfg-"));
+    configPath = join(configDir, "rokur.toml");
     //  Port and health path exist ONLY here. If rokur ignored the file, it
-    //  would bind 9090 and serve /health, and every assertion below fails.
-    Deno.writeTextFileSync(
+    //  would bind 7658 and serve /health, and every assertion below fails.
+    writeFileSync(
       configPath,
       `[metadata]
 name = "rokur-file-test"
@@ -52,11 +54,17 @@ max = 1000
 `,
     );
 
-    serverProcess = new Deno.Command("deno", {
-      args: ["run", "--allow-net", "--allow-env", "--allow-read", "main.js", "--config", configPath],
+    //  process.execPath is the bun binary running this suite; bun is not on
+    //  PATH in every environment, so spawning "bun" by name is not safe.
+    serverProcess = Bun.spawn([
+      process.execPath,
+      "main.js",
+      "--config",
+      configPath,
+    ], {
       cwd: REPO_ROOT,
       env: {
-        ...Deno.env.toObject(),
+        ...process.env,
         //  Deliberately NOT setting ROKUR_PORT or ROKUR_HEALTH_PATH: the file
         //  must be the only source of both.
         //  Empty, not unset: this also exercises the envOr() rule that an
@@ -72,9 +80,9 @@ max = 1000
         ROKUR_AUDIT_LOG: "false",
         ROKUR_REQUEST_LOG: "false",
       },
-      stdout: "null",
-      stderr: "null",
-    }).spawn();
+      stdout: "ignore",
+      stderr: "ignore",
+    });
 
     await waitFor(`${BASE_URL}/healthz`);
   });
@@ -82,20 +90,20 @@ max = 1000
   //  Synchronous, and deliberately does NOT await serverProcess.status --
   //  matching test/integration_test.js. Awaiting the exit hangs the run:
   //  rokur installs a SIGTERM handler for graceful shutdown that does not
-  //  resolve here, so the await never returns. Sanitizers are off for this
-  //  suite precisely because the subprocess outlives the assertions.
+  //  resolve here, so the await never returns: the subprocess deliberately
+  //  outlives the assertions.
   afterAll(() => {
     try {
       serverProcess.kill("SIGTERM");
     } catch { /* already exited */ }
     try {
-      Deno.removeSync(configPath);
+      rmSync(configDir, { recursive: true, force: true });
     } catch { /* already gone */ }
   });
 
   it("binds the port given only in the TOML", async () => {
     const r = await fetch(`${BASE_URL}/healthz`);
-    assertEquals(r.status, 200);
+    expect(r.status).toEqual(200);
     await r.body?.cancel();
   });
 
@@ -104,7 +112,7 @@ max = 1000
     //  given in the environment -- so a listening server proves the file's
     //  [secrets] required list was applied.
     const r = await fetch(`${BASE_URL}/healthz`);
-    assertEquals(r.status, 200);
+    expect(r.status).toEqual(200);
     await r.body?.cancel();
   });
 
@@ -113,36 +121,36 @@ max = 1000
     //  default must now 404. This is what distinguishes "read the file" from
     //  "happened to work".
     const r = await fetch(`${BASE_URL}/health`);
-    assertEquals(r.status, 404);
+    expect(r.status).toEqual(404);
     await r.body?.cancel();
   });
 });
 
-describe("rokur refuses to start on a bad config file", suiteOpts, () => {
+describe("rokur refuses to start on a bad config file", () => {
   it("exits non-zero rather than starting with a half-read policy", async () => {
-    const badPath = Deno.makeTempFileSync({ suffix: ".toml" });
+    const badDir = mkdtempSync(join(tmpdir(), "rokur-bad-"));
+    const badPath = join(badDir, "rokur.toml");
     //  [server] backend is the rejection that matters most: it is what the
     //  bundle used to specify, and accepting it would imply rokur proxies.
-    Deno.writeTextFileSync(badPath, `[server]\nbackend = "http://app:8080"\n`);
+    writeFileSync(badPath, `[server]\nbackend = "http://app:8080"\n`);
 
-    const proc = new Deno.Command("deno", {
-      args: ["run", "--allow-net", "--allow-env", "--allow-read", "main.js", "--config", badPath],
-      cwd: REPO_ROOT,
-      env: { ...Deno.env.toObject(), ROKUR_ENV: "development" },
-      stdout: "null",
-      stderr: "piped",
-    }).spawn();
-
-    const { code, stderr } = await proc.output();
-    const message = new TextDecoder().decode(stderr);
-
-    assertEquals(code, 1, `expected exit 1, got ${code}. stderr: ${message}`);
-    assertEquals(
-      message.includes("refusing to start"),
-      true,
-      `expected a refusal on stderr, got: ${message}`,
+    const proc = Bun.spawn(
+      [process.execPath, "main.js", "--config", badPath],
+      {
+        cwd: REPO_ROOT,
+        env: { ...process.env, ROKUR_ENV: "development" },
+        stdout: "ignore",
+        stderr: "pipe",
+      },
     );
 
-    Deno.removeSync(badPath);
+    //  Bun.spawn has no .output(): drain stderr, then await the exit code.
+    const message = await new Response(proc.stderr).text();
+    const code = await proc.exited;
+
+    expect(code, `expected exit 1, got ${code}. stderr: ${message}`).toEqual(1);
+    expect(message.includes("refusing to start"), `expected a refusal on stderr, got: ${message}`).toEqual(true);
+
+    rmSync(badDir, { recursive: true, force: true });
   });
 });

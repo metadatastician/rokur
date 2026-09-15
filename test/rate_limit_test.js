@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Unit tests for Rokur rate limiter.
 
-import { assertEquals } from "@std/assert";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createRateLimiter } from "../rate_limit.js";
 
 let limiter;
@@ -16,7 +15,7 @@ function cleanRateLimitEnv() {
     ]
   ) {
     try {
-      Deno.env.delete(key);
+      delete process.env[key];
     } catch { /* noop */ }
   }
 }
@@ -35,17 +34,17 @@ describe("rate limiter", () => {
   });
 
   it("allows requests under the limit", () => {
-    Deno.env.set("ROKUR_RATE_LIMIT_MAX", "5");
+    process.env["ROKUR_RATE_LIMIT_MAX"] = "5";
     limiter = createRateLimiter();
 
     for (let i = 0; i < 5; i++) {
       const result = limiter.checkRequest("10.0.0.1");
-      assertEquals(result.allowed, true);
+      expect(result.allowed).toEqual(true);
     }
   });
 
   it("denies requests over the general limit", () => {
-    Deno.env.set("ROKUR_RATE_LIMIT_MAX", "3");
+    process.env["ROKUR_RATE_LIMIT_MAX"] = "3";
     limiter = createRateLimiter();
 
     limiter.checkRequest("10.0.0.1");
@@ -53,88 +52,88 @@ describe("rate limiter", () => {
     limiter.checkRequest("10.0.0.1");
     const result = limiter.checkRequest("10.0.0.1");
 
-    assertEquals(result.allowed, false);
-    assertEquals(result.reason, "REQUEST_RATE_EXCEEDED");
+    expect(result.allowed).toEqual(false);
+    expect(result.reason).toEqual("REQUEST_RATE_EXCEEDED");
   });
 
   it("tracks IPs independently", () => {
-    Deno.env.set("ROKUR_RATE_LIMIT_MAX", "2");
+    process.env["ROKUR_RATE_LIMIT_MAX"] = "2";
     limiter = createRateLimiter();
 
     limiter.checkRequest("10.0.0.1");
     limiter.checkRequest("10.0.0.1");
     const blocked = limiter.checkRequest("10.0.0.1");
-    assertEquals(blocked.allowed, false);
+    expect(blocked.allowed).toEqual(false);
 
     // Different IP should still be allowed.
     const different = limiter.checkRequest("10.0.0.2");
-    assertEquals(different.allowed, true);
+    expect(different.allowed).toEqual(true);
   });
 
   it("denies after auth failure threshold", () => {
-    Deno.env.set("ROKUR_RATE_LIMIT_AUTH_FAIL_MAX", "2");
-    Deno.env.set("ROKUR_RATE_LIMIT_MAX", "100");
+    process.env["ROKUR_RATE_LIMIT_AUTH_FAIL_MAX"] = "2";
+    process.env["ROKUR_RATE_LIMIT_MAX"] = "100";
     limiter = createRateLimiter();
 
     limiter.recordAuthFailure("10.0.0.1");
     limiter.recordAuthFailure("10.0.0.1");
 
     const result = limiter.checkRequest("10.0.0.1");
-    assertEquals(result.allowed, false);
-    assertEquals(result.reason, "AUTH_FAIL_RATE_EXCEEDED");
+    expect(result.allowed).toEqual(false);
+    expect(result.reason).toEqual("AUTH_FAIL_RATE_EXCEEDED");
   });
 
   it("auth failures do not affect other IPs", () => {
-    Deno.env.set("ROKUR_RATE_LIMIT_AUTH_FAIL_MAX", "1");
+    process.env["ROKUR_RATE_LIMIT_AUTH_FAIL_MAX"] = "1";
     limiter = createRateLimiter();
 
     limiter.recordAuthFailure("10.0.0.1");
 
     const blocked = limiter.checkRequest("10.0.0.1");
-    assertEquals(blocked.allowed, false);
+    expect(blocked.allowed).toEqual(false);
 
     const ok = limiter.checkRequest("10.0.0.2");
-    assertEquals(ok.allowed, true);
+    expect(ok.allowed).toEqual(true);
   });
 
   it("reset clears all state", () => {
-    Deno.env.set("ROKUR_RATE_LIMIT_MAX", "1");
+    process.env["ROKUR_RATE_LIMIT_MAX"] = "1";
     limiter = createRateLimiter();
 
     limiter.checkRequest("10.0.0.1");
     const blocked = limiter.checkRequest("10.0.0.1");
-    assertEquals(blocked.allowed, false);
+    expect(blocked.allowed).toEqual(false);
 
     limiter.reset();
 
     const afterReset = limiter.checkRequest("10.0.0.1");
-    assertEquals(afterReset.allowed, true);
+    expect(afterReset.allowed).toEqual(true);
   });
 
   it("stats returns configuration and state", () => {
-    Deno.env.set("ROKUR_RATE_LIMIT_MAX", "42");
-    Deno.env.set("ROKUR_RATE_LIMIT_AUTH_FAIL_MAX", "7");
-    Deno.env.set("ROKUR_RATE_LIMIT_WINDOW_MS", "30000");
+    process.env["ROKUR_RATE_LIMIT_MAX"] = "42";
+    process.env["ROKUR_RATE_LIMIT_AUTH_FAIL_MAX"] = "7";
+    process.env["ROKUR_RATE_LIMIT_WINDOW_MS"] = "30000";
     limiter = createRateLimiter();
 
     limiter.checkRequest("10.0.0.1");
     limiter.checkRequest("10.0.0.2");
 
     const stats = limiter.stats();
-    assertEquals(stats.maxRequests, 42);
-    assertEquals(stats.authFailMax, 7);
-    assertEquals(stats.windowMs, 30000);
-    assertEquals(stats.trackedIps, 2);
+    expect(stats.maxRequests).toEqual(42);
+    expect(stats.authFailMax).toEqual(7);
+    expect(stats.windowMs).toEqual(30000);
+    expect(stats.trackedIps).toEqual(2);
   });
 
   it("returns positive retryAfterMs when rate limited", () => {
-    Deno.env.set("ROKUR_RATE_LIMIT_MAX", "1");
+    process.env["ROKUR_RATE_LIMIT_MAX"] = "1";
     limiter = createRateLimiter();
 
     limiter.checkRequest("10.0.0.1");
     const result = limiter.checkRequest("10.0.0.1");
 
-    assertEquals(result.allowed, false);
-    assertEquals(result.retryAfterMs > 0, true);
+    expect(result.allowed).toEqual(false);
+    expect(result.retryAfterMs > 0).toEqual(true);
   });
 });

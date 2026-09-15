@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 // Rokur audit log — structured, append-only record of every authorization decision.
+import { open as fsOpen } from "node:fs/promises";
 
 let auditFileHandle = null;
 let auditEnabled = true;
@@ -15,21 +16,19 @@ let auditEnabled = true;
  */
 export async function openAuditLog(options = {}) {
   auditEnabled = options.enabled ??
-    (Deno.env.get("ROKUR_AUDIT_LOG") ?? "true").trim().toLowerCase() !==
+    (process.env.ROKUR_AUDIT_LOG ?? "true").trim().toLowerCase() !==
       "false";
   const logPath = options.path ??
-    (Deno.env.get("ROKUR_AUDIT_LOG_PATH") ?? "").trim();
+    (process.env.ROKUR_AUDIT_LOG_PATH ?? "").trim();
 
   if (!auditEnabled || !logPath) {
     return;
   }
 
   try {
-    auditFileHandle = await Deno.open(logPath, {
-      write: true,
-      create: true,
-      append: true,
-    });
+    // Append mode ("a") creates the file if absent and never truncates.
+    // Bun.write() would TRUNCATE, which would destroy the existing log.
+    auditFileHandle = await fsOpen(logPath, "a");
   } catch (error) {
     console.error(JSON.stringify({
       level: "WARN",
@@ -47,8 +46,10 @@ export async function openAuditLog(options = {}) {
  */
 export function closeAuditLog() {
   if (auditFileHandle) {
+    // FileHandle.close() returns a Promise: a sync try/catch cannot catch its
+    // rejection, so swallow it explicitly to avoid an unhandled rejection.
     try {
-      auditFileHandle.close();
+      auditFileHandle.close().catch(() => {});
     } catch {
       // Ignore close errors during shutdown.
     }

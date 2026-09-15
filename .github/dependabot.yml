@@ -1,9 +1,14 @@
 # SPDX-License-Identifier: MPL-2.0
 # Dependabot configuration for RSR-compliant repositories
-# Trimmed to the ecosystems this repo actually uses. rokur is a Deno project;
-# Dependabot has no Deno ecosystem, so only GitHub Actions is managed here.
-# (The RSR template ships cargo/mix/npm/pip/nix as examples — none have a
-# matching manifest in this repo, so declaring them only produced red
+# Trimmed to the ecosystems this repo actually uses.
+#
+# rokur was a Deno project, which Dependabot has no ecosystem for, so only
+# GitHub Actions was managed here. Since the move to bun the repo has a real
+# `package.json` + `bun.lock`, which Dependabot reads through its npm
+# ecosystem — so npm is declared now that a manifest actually backs it.
+#
+# (The RSR template also ships cargo/mix/pip/nix as examples — none have a
+# matching manifest in this repo, so declaring them would only produce red
 # "Dependabot Updates" runs against non-existent manifests.)
 
 version: 2
@@ -15,5 +20,15 @@ updates:
       interval: "weekly"
     groups:
       actions:
+        patterns:
+          - "*"
+
+  # npm - reads package.json + bun.lock (bun's lockfile is text in 1.4.x)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm:
         patterns:
           - "*"

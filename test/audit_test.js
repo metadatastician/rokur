@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Unit tests for Rokur audit log.
 
-import { assertEquals } from "@std/assert";
-import { afterEach, describe, it } from "@std/testing/bdd";
+import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   closeAuditLog,
   openAuditLog,
@@ -16,7 +18,8 @@ describe("audit log", () => {
   });
 
   it("recordDecision writes structured JSON to file", async () => {
-    const tmpFile = await Deno.makeTempFile({ suffix: ".jsonl" });
+    const tmpDir = await mkdtemp(join(tmpdir(), "rokur-audit-"));
+    const tmpFile = join(tmpDir, "audit.jsonl");
 
     await openAuditLog({ enabled: true, path: tmpFile });
     await recordDecision({
@@ -34,26 +37,27 @@ describe("audit log", () => {
     });
     closeAuditLog();
 
-    const content = await Deno.readTextFile(tmpFile);
+    const content = await readFile(tmpFile, "utf8");
     const record = JSON.parse(content.trim());
 
-    assertEquals(record.type, "authorization_decision");
-    assertEquals(record.requestId, "req-001");
-    assertEquals(record.action, "authorize-start");
-    assertEquals(record.allowed, true);
-    assertEquals(record.code, "AUTHORIZED");
-    assertEquals(record.engine, "builtin");
-    assertEquals(record.image, "alpine:3.19");
-    assertEquals(record.name, "test-container");
-    assertEquals(record.clientIp, "10.0.0.1");
-    assertEquals(record.authenticated, true);
-    assertEquals(typeof record.timestamp, "string");
+    expect(record.type).toEqual("authorization_decision");
+    expect(record.requestId).toEqual("req-001");
+    expect(record.action).toEqual("authorize-start");
+    expect(record.allowed).toEqual(true);
+    expect(record.code).toEqual("AUTHORIZED");
+    expect(record.engine).toEqual("builtin");
+    expect(record.image).toEqual("alpine:3.19");
+    expect(record.name).toEqual("test-container");
+    expect(record.clientIp).toEqual("10.0.0.1");
+    expect(record.authenticated).toEqual(true);
+    expect(typeof record.timestamp).toEqual("string");
 
-    await Deno.remove(tmpFile);
+    await rm(tmpDir, { recursive: true, force: true });
   });
 
   it("recordAuthFailure writes authentication failure record", async () => {
-    const tmpFile = await Deno.makeTempFile({ suffix: ".jsonl" });
+    const tmpDir = await mkdtemp(join(tmpdir(), "rokur-audit-"));
+    const tmpFile = join(tmpDir, "audit.jsonl");
 
     await openAuditLog({ enabled: true, path: tmpFile });
     await recordAuthFailure({
@@ -63,19 +67,20 @@ describe("audit log", () => {
     });
     closeAuditLog();
 
-    const content = await Deno.readTextFile(tmpFile);
+    const content = await readFile(tmpFile, "utf8");
     const record = JSON.parse(content.trim());
 
-    assertEquals(record.type, "authentication_failure");
-    assertEquals(record.requestId, "req-002");
-    assertEquals(record.path, "/v1/authorize-start");
-    assertEquals(record.clientIp, "192.168.1.100");
+    expect(record.type).toEqual("authentication_failure");
+    expect(record.requestId).toEqual("req-002");
+    expect(record.path).toEqual("/v1/authorize-start");
+    expect(record.clientIp).toEqual("192.168.1.100");
 
-    await Deno.remove(tmpFile);
+    await rm(tmpDir, { recursive: true, force: true });
   });
 
   it("appends multiple records to the same file", async () => {
-    const tmpFile = await Deno.makeTempFile({ suffix: ".jsonl" });
+    const tmpDir = await mkdtemp(join(tmpdir(), "rokur-audit-"));
+    const tmpFile = join(tmpDir, "audit.jsonl");
 
     await openAuditLog({ enabled: true, path: tmpFile });
 
@@ -106,17 +111,17 @@ describe("audit log", () => {
 
     closeAuditLog();
 
-    const content = await Deno.readTextFile(tmpFile);
+    const content = await readFile(tmpFile, "utf8");
     const lines = content.trim().split("\n");
-    assertEquals(lines.length, 2);
+    expect(lines.length).toEqual(2);
 
     const first = JSON.parse(lines[0]);
     const second = JSON.parse(lines[1]);
-    assertEquals(first.requestId, "req-a");
-    assertEquals(second.requestId, "req-b");
-    assertEquals(second.allowed, false);
+    expect(first.requestId).toEqual("req-a");
+    expect(second.requestId).toEqual("req-b");
+    expect(second.allowed).toEqual(false);
 
-    await Deno.remove(tmpFile);
+    await rm(tmpDir, { recursive: true, force: true });
   });
 
   it("does nothing when audit log is disabled", async () => {
