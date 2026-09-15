@@ -273,12 +273,23 @@ async function handleReady(requestId) {
   try {
     decision = await policyEvaluator.evaluate({});
   } catch (error) {
+    // The diagnostic goes to the operator, never to the caller. /ready is
+    // unauthenticated, and a policy-engine exception can carry a config path
+    // or the NAME of a secret -- which is exactly what this gate exists to
+    // withhold. The caller gets the stable machine code; an operator joins
+    // the two by x-request-id. (CodeQL js/stack-trace-exposure, PR #19.)
+    console.error(JSON.stringify({
+      level: "ERROR",
+      message: "readiness probe failed: policy engine unavailable",
+      error: error instanceof Error ? error.message : String(error),
+      requestId,
+      service: "rokur",
+    }));
     return jsonResponse(
       {
         status: "not_ready",
         service: "rokur",
         code: "POLICY_ENGINE_UNAVAILABLE",
-        error: error instanceof Error ? error.message : String(error),
         timestamp: new Date().toISOString(),
       },
       503,
