@@ -43,7 +43,7 @@ jobs:
         with:
           bun-version: 1.4.1
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --ignore-scripts
       - name: Run the suite
         id: suite
         # Captured by redirection, not a pipe: a pipe would hand this step the

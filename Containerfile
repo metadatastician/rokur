@@ -19,7 +19,8 @@ RUN apk add --no-cache curl unzip
 # wrong-architecture or truncated download fail at BUILD time rather than at
 # the first request in production.
 ARG BUN_VERSION=1.4.1
-RUN curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" \
+RUN curl -fsSL --proto '=https' --tlsv1.2 \
+        "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" \
         -o /tmp/bun.zip \
     && unzip -j /tmp/bun.zip 'bun-linux-x64/bun' -d /usr/local/bin \
     && rm /tmp/bun.zip \
@@ -30,7 +31,7 @@ RUN curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERS
 # change does not invalidate the dependency layer.
 WORKDIR /build
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
+RUN bun install --frozen-lockfile --production --ignore-scripts
 
 # Copy application source.
 COPY main.js config.js audit.js rate_limit.js ./
