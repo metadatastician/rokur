@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "smol-toml": "1.8.0"
+    "smol-toml": "1.9.1"
   },
   "scripts": {
     "start": "bun run main.js",

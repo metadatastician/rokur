@@ -5,11 +5,11 @@
     "": {
       "name": "@metadatastician/rokur",
       "dependencies": {
-        "smol-toml": "1.8.0",
+        "smol-toml": "1.9.1",
       },
     },
   },
   "packages": {
-    "smol-toml": ["smol-toml@1.8.0", "", {}, "sha512-kCZr2V3ch9i00x8zXRhjUNVcjG9ijES5dDudkXvUVCT5QlJNQWElSJdZqyPemffHoLNUYwOcou0Fy+ojN0uHSQ=="],
+    "smol-toml": ["smol-toml@1.9.1", "", {}, "sha512-j7WyPdf0CJoutMzMoPLF/bVXHtKZIT9Rb4eGeEbWw8X2t5oirjPgpL+OpaENZrILYaXqYwnVH+qgUwVbl+pUJQ=="],
   }
 }
