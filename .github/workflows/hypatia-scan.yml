@@ -5,21 +5,25 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-# Deny the workflow-level default. The sole job declares the only scope it
-# needs, so a future job cannot silently receive the repository default token.
-# (Sonar githubactions:S8234 read-all, and S8264 read-at-workflow-level.)
-permissions: {}
+# The reusable scanner uploads its filtered SARIF and can optionally inspect
+# workflow artifacts. Grant only the scopes it declares; do not inherit the
+# caller's secrets or permissions.
+permissions:
+  actions: read
+  contents: read
+  security-events: write
 jobs:
   scan:
-    runs-on: ubuntu-latest
-    # `read-all` previously granted every read scope to a job that runs checkout
-    # and one `echo`, nothing else. `contents: read` is what checkout needs; no
-    # step here reads actions, packages, issues, deployments or anything else.
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Run Hypatia scan
-        run: echo "Hypatia scan placeholder - enroll at hyperpolymath/hypatia"
+    # Pin the reusable workflow to the revision already used by Rokur's
+    # secret-scanner wrapper. The standards repository records all nested
+    # action pins in its central actions.lock at this revision.
+    uses: metadatastician/standards/.github/workflows/hypatia-scan-reusable.yml@b8f60511e76c9015d86990317162dce653c92fe1
+    with:
+      # Hypatia reports high/critical findings without turning its advisory
+      # scanner into a release gate for this repository.
+      block-on-high: false
+      # This repository has no fleet report-back producer in this run.
+      report-backs-artifact: ""
+      previous-grid-artifact: ""
+    # Deliberately no `secrets: inherit`: the reusable scanner accepts only an
+    # optional explicit HYPATIA_SCAN_PAT and falls back to GITHUB_TOKEN.

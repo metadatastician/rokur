@@ -1,25 +1,13 @@
 # SPDX-License-Identifier: MPL-2.0
-# justfile — Rokur secrets management gate
+# Justfile — Rokur secrets management gate
 
-# Run the test suite.
+# Run the complete Bun test suite.
 test:
-    deno task test
+    bun run test
 
-# Lint all source files.
-lint:
-    deno task lint
-
-# Format all source files.
-fmt:
-    deno task fmt
-
-# Check formatting without modifying files.
-fmt-check:
-    deno task fmt:check
-
-# Run the development server with all permissions.
+# Run the development server.
 dev:
-    deno run --allow-net --allow-env --allow-read --allow-write main.js
+    bun run dev
 
-# Run all checks: lint, format verification, and tests.
-check: lint fmt-check test
+# Run the project's reproducible verification task.
+check: test

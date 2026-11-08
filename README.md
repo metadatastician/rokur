@@ -90,7 +90,7 @@ Every authorization decision and authentication failure is recorded:
 
 ### Secure Defaults
 
-- Default bind host is `127.0.0.1` (set `ROKUR_HOST` to override).
+- Default bind host is `0.0.0.0` (set `ROKUR_HOST` to override).
 - Startup fails if `ROKUR_REQUIRED_SECRETS` is empty.
 - Startup fails if `ROKUR_API_TOKEN` is missing.
 - In `ROKUR_ENV=production`, insecure bypass flags are rejected.
@@ -106,7 +106,7 @@ Every authorization decision and authentication failure is recorded:
 
 | Variable                             | Default       | Description                                     |
 | ------------------------------------ | ------------- | ----------------------------------------------- |
-| `ROKUR_HOST`                         | `127.0.0.1`   | Bind host                                       |
+| `ROKUR_HOST`                         | `0.0.0.0`     | Bind host                                       |
 | `ROKUR_PORT`                         | `7658`        | Bind port                                       |
 | `ROKUR_ENV`                          | `development` | Environment (`production` enforces strict mode) |
 | `ROKUR_API_TOKEN`                    | _(required)_  | API authentication token                        |
