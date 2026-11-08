@@ -3,7 +3,7 @@
 name: Documentation
 description: Report unclear, missing, or incorrect documentation
 title: "[Docs]: "
-labels: ["documentation", "priority: unset", "triage"]
+labels: ["documentation"]
 assignees: []
 body:
   - type: markdown

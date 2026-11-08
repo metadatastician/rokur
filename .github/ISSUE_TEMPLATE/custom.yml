@@ -3,7 +3,6 @@
 name: Other
 description: Report an issue that does not fit the other categories
 title: ""
-labels: ["triage"]
 assignees: []
 body:
   - type: markdown

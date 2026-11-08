@@ -106,14 +106,48 @@ jobs:
             -e ROKUR_SECRET_PANIC_PROFILE=enabled \
             rokur:ci
           # Probe from the HOST, so this tests the published port and the bind
-          # address together, not just in-container loopback.
-          curl --retry 30 --retry-delay 1 --retry-connrefused -fsS \
-            -o /dev/null http://127.0.0.1:17658/health
-          health=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:17658/health)
-          ready=$(curl  -s -o /dev/null -w '%{http_code}' http://127.0.0.1:17658/ready)
+          # address together, not just in-container loopback.  A newly published
+          # Podman port can reset one request after accepting another, so every
+          # endpoint-status request retries transport failures.  HTTP statuses
+          # themselves are returned immediately and asserted below.
+          probe_status() {
+            url="$1"
+            attempt=1
+            while [ "$attempt" -le 30 ]; do
+              if status=$(curl --connect-timeout 2 --max-time 5 -sS -o /dev/null -w '%{http_code}' "$url"); then
+                printf '%s\n' "$status"
+                return 0
+              fi
+              if [ "$attempt" -eq 30 ]; then
+                echo "curl never returned an HTTP status after 30 attempts: $url" >&2
+                return 1
+              fi
+              echo "curl transport failure ($attempt/30) for $url; retrying" >&2
+              attempt=$((attempt + 1))
+              sleep 1
+            done
+          }
+          if ! health=$(probe_status http://127.0.0.1:17658/health); then
+            echo "::error::/health never returned an HTTP status"
+            podman logs rokur-ci
+            exit 1
+          fi
+          if ! ready=$(probe_status http://127.0.0.1:17658/ready); then
+            echo "::error::/ready never returned an HTTP status"
+            podman logs rokur-ci
+            exit 1
+          fi
           echo "/health=$health /ready=$ready"
-          [ "$health" = "200" ] || { echo "::error::/health returned $health, expected 200"; podman logs rokur-ci; exit 1; }
-          [ "$ready"  = "200" ] || { echo "::error::/ready returned $ready, expected 200 when required secrets are present"; podman logs rokur-ci; exit 1; }
+          if [ "$health" != "200" ]; then
+            echo "::error::/health returned $health, expected 200"
+            podman logs rokur-ci
+            exit 1
+          fi
+          if [ "$ready" != "200" ]; then
+            echo "::error::/ready returned $ready, expected 200 when required secrets are present"
+            podman logs rokur-ci
+            exit 1
+          fi
           podman rm -f rokur-ci
       - name: Prove readiness can actually FAIL
         run: |
@@ -126,13 +160,47 @@ jobs:
             -e ROKUR_API_TOKEN=ci-token-$RANDOM$RANDOM \
             -e ROKUR_REQUIRED_SECRETS=panic_profile \
             rokur:ci
-          curl --retry 30 --retry-delay 1 --retry-connrefused -fsS \
-            -o /dev/null http://127.0.0.1:17659/health
-          health=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:17659/health)
-          ready=$(curl  -s -o /dev/null -w '%{http_code}' http://127.0.0.1:17659/ready)
+          # Retry every endpoint-status request, including this negative case:
+          # a transient connection reset must not be mistaken for proof that
+          # readiness failed as designed.
+          probe_status() {
+            url="$1"
+            attempt=1
+            while [ "$attempt" -le 30 ]; do
+              if status=$(curl --connect-timeout 2 --max-time 5 -sS -o /dev/null -w '%{http_code}' "$url"); then
+                printf '%s\n' "$status"
+                return 0
+              fi
+              if [ "$attempt" -eq 30 ]; then
+                echo "curl never returned an HTTP status after 30 attempts: $url" >&2
+                return 1
+              fi
+              echo "curl transport failure ($attempt/30) for $url; retrying" >&2
+              attempt=$((attempt + 1))
+              sleep 1
+            done
+          }
+          if ! health=$(probe_status http://127.0.0.1:17659/health); then
+            echo "::error::/health never returned an HTTP status"
+            podman logs rokur-ci-notready
+            exit 1
+          fi
+          if ! ready=$(probe_status http://127.0.0.1:17659/ready); then
+            echo "::error::/ready never returned an HTTP status"
+            podman logs rokur-ci-notready
+            exit 1
+          fi
           echo "with the required secret missing: /health=$health /ready=$ready"
           # Liveness must NOT follow readiness down: /health answers "is this
           # process alive?", which it is.
-          [ "$health" = "200" ] || { echo "::error::/health returned $health; liveness must not track readiness"; exit 1; }
-          [ "$ready"  = "503" ] || { echo "::error::/ready returned $ready, expected 503 REQUIRED_SECRETS_MISSING"; podman logs rokur-ci-notready; exit 1; }
+          if [ "$health" != "200" ]; then
+            echo "::error::/health returned $health; liveness must not track readiness"
+            podman logs rokur-ci-notready
+            exit 1
+          fi
+          if [ "$ready" != "503" ]; then
+            echo "::error::/ready returned $ready, expected 503 REQUIRED_SECRETS_MISSING"
+            podman logs rokur-ci-notready
+            exit 1
+          fi
           podman rm -f rokur-ci-notready

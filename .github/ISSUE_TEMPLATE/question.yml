@@ -3,7 +3,7 @@
 name: Question
 description: Ask a question about usage or behaviour
 title: "[Question]: "
-labels: ["question", "triage"]
+labels: ["question"]
 assignees: []
 body:
   - type: markdown
