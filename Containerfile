@@ -7,23 +7,30 @@
 # ---------------------------------------------------------------------------
 FROM cgr.dev/chainguard/wolfi-base:latest AS build
 
-RUN apk add --no-cache curl unzip
+# wolfi-base already supplies BusyBox tar; coreutils supplies sha512sum.
+RUN apk add --no-cache coreutils curl
 
 # Install Bun (pinned version for reproducibility).
 #
-# `unzip -j ... -d DIR`, never `install`: /usr/local/bin does not exist in
-# wolfi-base. `unzip -d` creates it; `install` without -D does not. `-j` junks
-# the archive path because bun's zip nests its binary under bun-linux-x64/.
+# The GitHub release asset for 1.4.1 returned HTTP 504 in CI, so retrieve the
+# corresponding official @oven registry package instead. It holds the same
+# Linux x64 glibc binary, but comes from registry.npmjs.org rather than the
+# release-asset CDN. Verify its published SHA-512 before extracting it.
 #
 # The trailing `bun --version` is deliberate and load-bearing: it makes a
-# wrong-architecture or truncated download fail at BUILD time rather than at
-# the first request in production.
+# wrong-architecture, bad digest, or truncated download fail at BUILD time
+# rather than at the first request in production.
 ARG BUN_VERSION=1.4.1
+ARG BUN_TARBALL_SHA512=99ad803bb7ffd1867528b53b2073b4045778d73af231b3c0da1ce0c88c393161bae0c554bc27db29473bfa743ea4b8093881ee03daf4ef98b44d65a504613e04
 RUN curl -fsSL --proto '=https' --tlsv1.2 \
-        "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" \
-        -o /tmp/bun.zip \
-    && unzip -j /tmp/bun.zip 'bun-linux-x64/bun' -d /usr/local/bin \
-    && rm /tmp/bun.zip \
+        --retry 5 --retry-delay 2 --retry-connrefused \
+        "https://registry.npmjs.org/@oven/bun-linux-x64/-/bun-linux-x64-${BUN_VERSION}.tgz" \
+        -o /tmp/bun.tgz \
+    && echo "${BUN_TARBALL_SHA512}  /tmp/bun.tgz" | sha512sum -c - \
+    && mkdir -p /usr/local/bin \
+    && tar -xzf /tmp/bun.tgz -C /tmp \
+    && mv /tmp/package/bin/bun /usr/local/bin/bun \
+    && rm -rf /tmp/bun.tgz /tmp/package \
     && chmod +x /usr/local/bin/bun \
     && /usr/local/bin/bun --version
 
